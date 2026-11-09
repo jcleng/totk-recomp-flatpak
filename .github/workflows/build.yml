@@ -183,15 +183,9 @@ jobs:
           XVFB_PID=$!
           sleep 3
           set +e
-          DISPLAY=:99 timeout 180 flatpak run --command=sh "${APP_ID}" -c '
-            set -eu
-            R=/app/share/totk-recomp
-            export TCL_LIBRARY="$R/python/lib/tcl9.0" TK_LIBRARY="$R/python/lib/tk9.0"
-            export PYTHONDONTWRITEBYTECODE=1
-            cd "$R"
-            # 建窗口 + 走一遍状态机（每种界面语言的所有页面）；结束时会自己退出
-            "$R/python/bin/python3" -m installer.gui --selftest
-          ' >/tmp/selftest.log 2>&1
+          # 直接跑真实的包装脚本（而不是绕开它调 python），这样验的就是用户走的那条路径，
+          # 连带覆盖 wrapper 里的 Tcl/Tk 路径、PYTHONWARNINGS 过滤与 exec。
+          DISPLAY=:99 timeout 180 flatpak run "${APP_ID}" --selftest >/tmp/selftest.log 2>&1
           RC=$?
           set -e
           kill "$XVFB_PID" 2>/dev/null || true
