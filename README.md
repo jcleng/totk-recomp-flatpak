@@ -83,11 +83,16 @@ flatpak run io.github.jcleng.TotKRecomp
 原因值得记一下：安装器窗口用的是 **Tk 9，它没有 Wayland 后端**（`libtcl9tk9.0.so` 里搜不到任何
 `wayland` 符号，`tk windowingsystem` 只会返回 `x11`）。所以纯 Wayland 会话下必须走 XWayland。
 
-第一版清单里同时写了 `--socket=x11` 和 `--socket=fallback-x11`，而 `fallback-x11` 的语义是
-「**只在没有 wayland socket 时**才给 x11」——两者同时存在时 Flatpak 不转发 X11，
+第一版清单里同时写了 `--socket=x11` 和 `--socket=fallback-x11`。flatpak 文档写得很明确：
+
+> The `fallback-x11` option makes the X11 socket available only if there is no Wayland socket. …
+> The `fallback-x11` option takes precedence when both are supported.
+
+也就是说两者共存时，**`fallback-x11` 优先**：Wayland 会话下 X11 socket 直接不给，
 沙箱里 `DISPLAY` 就是空的，`tk.Tk()` 直接抛异常。修法是 `x11` 与 `wayland` 都**无条件**给出，
 包装脚本再加一层兜底：`DISPLAY` 为空时自己扫描 `/tmp/.X11-unix/X*` 取实际显示号
-（XWayland 的显示号不一定是 `:0`）。
+（XWayland 的显示号不一定是 `:0`）。CI 里有一条断言直接拉 `flatpak info --show-metadata`，
+禁止 `fallback-x11` 回来。
 
 自查：
 
@@ -189,7 +194,7 @@ gh release view v0.3.13 -R valentderah/totk-pc-recomp --json assets \
 | 沙箱内工具链 | 上面那串路径再查一遍，然后调 `layout.find().missing()`，要求返回空 |
 | 沙箱内编译 | 用**包内自带** clang + `--sysroot=llvm/sysroot` + `-fuse-ld=lld` 把 `installer/hostcheck.c` 真的编出来，运行并打印 Vulkan 探测结果 |
 | 沙箱内 GUI | 装 Xvfb 起 `:99`，跑**真实的包装脚本** `flatpak run <app> --selftest`（不是绕开 wrapper 直接调 python）：它会建出真窗口、把每一种界面语言的每一页都渲染一遍并断言、然后自己退出，退出码 0 才算通过；同时要求输出里不能出现 `SyntaxWarning` |
-| Wayland-only | 关键一步：**抽掉** `DISPLAY`、只留 `WAYLAND_DISPLAY`，跑完整的 `totk-recomp-wrapper`，要求窗口能起、输出里没有 `no display name`/`TclError`。上一步显式设了 `DISPLAY=:99`，永远测不到这一场景 |
+| X11 授权 | 断言 flatpak 元数据里 `sockets=` 含 `x11` **且不含 `fallback-x11`** —— 按 flatpak 文档，`fallback-x11` 让 X11 「只在没有 wayland socket 时可用」且两者共存时优先，Tk 9 没有 Wayland 后端，一旦带上它 Wayland 桌面下就必然启动失败。另在沙箱内确认 `DISPLAY` 非空、`/tmp/.X11-unix` 可见 |
 
 这几层覆盖了 Flatpak 封装最容易踩的坑：只读 `/app` 导致 Python 写不了 `__pycache__`、
 Tcl/Tk 数据目录没设对、`libXft.so.2` 在沙箱里找不到、以及 sysroot 里缺链接期依赖。

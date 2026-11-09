@@ -204,40 +204,39 @@ jobs:
             exit 1
           fi
 
-      # 上一个步骤显式设了 DISPLAY=:99，所以它永远测不到真实的 Wayland-only 场景。
-      # 这里把 DISPLAY 拿掉、只留 WAYLAND_DISPLAY，走一遍完整的包装脚本：
-      # 这能捕获 --socket=fallback-x11 那种「Wayland 下不给 X11，Tk 直接报
-      # no display name and no $DISPLAY」的回归，以及 X socket 自动探测是否真的生效。
-      - name: Verify the wrapper works on a Wayland-only session
+      # 上一个步骤显式设了 DISPLAY=:99，所以它永远测不到「Wayland 会话下 X11 被拿掉」这个回归。
+      # 注意：不能用 --unset-env=DISPLAY 模拟——那等于「宿主根本没有 X server」，
+      # 不是 Wayland 场景，而且沙箱里 /tmp/.X11-unix 是私有的，永远看不到宿主的 Xvfb。
+      #
+      # 真正要防的是 flatpak 元数据里的 socket 配置错误。按 flatpak 文档：
+      #   fallback-x11 让 X11 socket 只在没有 wayland socket 时可用，
+      #   且两者同时存在时 fallback-x11 优先。
+      # Tk 9 没有 Wayland 后端，所以只要 metadata 里出现 fallback-x11 或缺少 x11，
+      # Wayland 桌面下安装器就必然起不来。这里直接断言元数据。
+      - name: Verify the sandbox grants X11 for the Tk setup window
         run: |
           set -eu
-          if ! command -v Xvfb >/dev/null; then
-            dnf install -y xorg-x11-server-Xvfb || \
-              (microdnf install -y xorg-x11-server-Xvfb) || \
-              { echo "::warning::无法安装 Xvfb，跳过 Wayland-only 测试"; exit 0; }
-          fi
-          Xvfb :99 -screen 0 1920x1080x24 >/tmp/xvfb2.log 2>&1 &
-          XVFB_PID=$!
-          sleep 3
-          set +e
-          # 关键：不给 DISPLAY，模拟 Wayland 会话。wrapper 应当自己从 /tmp/.X11-unix/X* 探测出来。
-          timeout 25 flatpak run --env=WAYLAND_DISPLAY=wayland-0 \
-                    --unset-env=DISPLAY \
-                    "${APP_ID}" </dev/null >/tmp/wayland.log 2>&1
-          RC=$?
-          set -e
-          kill "$XVFB_PID" 2>/dev/null || true
-          tail -30 /tmp/wayland.log
-          echo "wrapper exit code: $RC (124 = 窗口正常运行直到超时，即成功)"
-          # 124 是 timeout 杀掉的，说明窗口一直在正常跑；其它值都是启动失败
-          test "$RC" -eq 124 || {
-            echo "::error::Wayland-only 环境下安装器窗口起不来（退出码 $RC）"
+          META=$(flatpak info --show-metadata "${APP_ID}")
+          echo "$META"
+          echo "---- checks ----"
+          # 必须有 x11（Tk 只能走 X11/XWayland）
+          echo "$META" | grep -q 'sockets=.*x11' || {
+            echo "::error::metadata 缺少 x11 socket，Wayland 桌面下 Tk 将无法启动"
             exit 1
           }
-          if grep -qE 'no display name|no \$DISPLAY|TclError' /tmp/wayland.log; then
-            echo "::error::Wayland-only 环境下 Tk 报找不到显示"
+          # 绝不能有 fallback-x11（它会在有 wayland socket 时禁掉 X11）
+          if echo "$META" | grep -q 'fallback-x11'; then
+            echo "::error::metadata 含 fallback-x11：Wayland 会话下 X11 会被禁用，Tk 9 无法启动"
             exit 1
           fi
+          # 沙箱里真的能拿到宿主 X socket 与 DISPLAY
+          DISPLAY=:99 flatpak run --command=sh "${APP_ID}" -c '
+            set -eu
+            echo "DISPLAY=$DISPLAY"
+            ls -d /tmp/.X11-unix
+            test -n "$DISPLAY"
+          '
+          echo "X11 is available to the sandbox"
 
       - name: Verify wrapped entry point resolves
         run: |
