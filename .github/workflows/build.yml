@@ -1,0 +1,302 @@
+name: Build Flatpak
+
+# 创建 Release 需要写权限（默认 GITHUB_TOKEN 为只读）
+permissions:
+  contents: write
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'io.github.jcleng.TotKRecomp.yaml'
+      - 'totk-recomp-wrapper'
+      - 'io.github.jcleng.TotKRecomp.desktop'
+      - 'io.github.jcleng.TotKRecomp.metainfo.xml'
+      - 'icons/**'
+      - '.github/workflows/build.yml'
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: '构建完成后创建 Release'
+        type: boolean
+        required: false
+        default: true
+
+env:
+  TOTK_VERSION: "0.3.13"
+  APP_ID: io.github.jcleng.TotKRecomp
+  UPSTREAM_REPO: valentderah/totk-pc-recomp
+
+jobs:
+  flatpak:
+    name: "Flatpak"
+    runs-on: ubuntu-latest
+    container:
+      # 与清单中的 runtime org.freedesktop.Platform 25.08 对应
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08
+      options: --privileged
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 先用带重试的 curl 把上游 AppImage 拉下来，再让 flatpak-builder 直接吃本地文件，
+      # 避免上游 release CDN 的 504 抖动打断整个构建。
+      - name: Prefetch upstream AppImage
+        run: |
+          set -eu
+          URL="https://github.com/${UPSTREAM_REPO}/releases/download/v${TOTK_VERSION}/TotK-Setup-x86_64-${TOTK_VERSION}-linux.AppImage"
+          SHA=$(grep -A2 'TotK-Setup-x86_64-.*linux.AppImage' "${APP_ID}.yaml" | grep sha256 | head -1 | awk '{print $2}')
+          test -n "$SHA"
+          echo "expect sha256: $SHA"
+          for i in $(seq 1 10); do
+            echo "::group::attempt $i"
+            if curl -L --fail --retry 5 --retry-delay 5 --retry-all-errors \
+                 --connect-timeout 30 --max-time 1800 -o upstream.AppImage "$URL"; then
+              if echo "$SHA  upstream.AppImage" | sha256sum -c -; then
+                echo "::endgroup::"
+                ls -lh upstream.AppImage
+                exit 0
+              fi
+              echo "checksum mismatch, retrying"
+            fi
+            echo "::endgroup::"
+            sleep 10
+          done
+          echo "::error::无法下载上游 AppImage（多次重试后仍失败）"
+          exit 1
+
+      - name: Patch manifest to local source
+        run: |
+          set -eu
+          python3 - <<'PY'
+          import os, re
+          app = os.environ['APP_ID']
+          manifest = f'{app}.yaml'
+          text = open(manifest).read()
+          # 把 remote file source 换成同目录下的本地文件（flatpak-builder 支持 type: file + path）
+          pattern = re.compile(
+              r'- type: file\n\s+url: https://github\.com/[^\n]*/releases/download/'
+              r'[^\n]+\n\s+sha256: [0-9a-f]+\n\s+dest-filename: TotK-Setup\.appimage\n')
+          new = '- type: file\n        path: upstream.AppImage\n        dest-filename: TotK-Setup.appimage\n'
+          text2, n = pattern.subn(new, text)
+          assert n == 1, f'expected 1 remote appimage source, patched {n}'
+          open(manifest, 'w').write(text2)
+          print('manifest patched -> local upstream.AppImage')
+          PY
+          grep -n -A3 'type: file' "${APP_ID}.yaml" | head -12
+
+      - name: Build Flatpak
+        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: ${{ env.APP_ID }}.flatpak
+          manifest-path: ${{ env.APP_ID }}.yaml
+          cache-key: flatpak-builder-totk-${{ env.TOTK_VERSION }}
+          repository-name: flathub
+          branch: stable
+          upload-artifact: false
+
+      - name: Verify bundle
+        run: |
+          set -eu
+          ls -lh "${APP_ID}.flatpak"
+          echo "bundle size: $(stat -c %s "${APP_ID}.flatpak") bytes"
+          flatpak install --user --noninteractive --bundle "${APP_ID}.flatpak" || {
+            echo "::error::bundle 安装校验失败"
+            exit 1
+          }
+          flatpak list --app --columns=application,branch
+
+      # 安装器首次启动时 layout.py 会逐个 stat 自带工具链，缺一个就直接报 "release incomplete"。
+      # 这一段在沙箱里把同一份检查跑一遍，再真的用自带 clang 编译并运行 hostcheck（Vulkan 探测），
+      # 把「包能装但一运行就报错」挡在发布之前。
+      - name: Verify bundled toolchain inside the sandbox
+        run: |
+          set -eu
+          flatpak run --command=sh "${APP_ID}" -c '
+            set -eu
+            R=/app/share/totk-recomp
+            echo "::group::release tree"
+            du -sh "$R"
+            ls "$R"
+            echo "::endgroup::"
+
+            echo "::group::build-time self check (same list as the manifest)"
+            for p in \
+              python/bin/python3 \
+              llvm/bin/clang llvm/bin/lld llvm/sysroot \
+              bin/totk_xlate bin/ninja bin/hactool bin/libSDL3.so.0 \
+              data/shader_list.tsv \
+              runtime/libtotkrt.a runtime/libtotkrt-v2.a \
+              runtime/deps/include/vulkan/vulkan.h \
+              runtime/deps/include/vma/vk_mem_alloc.h \
+              runtime/deps/lib/libzstd.a \
+              tools/build_game.py tools/prepare_shaders.py tools/make_romfs_patches.py \
+              recomp/gen.py recomp/patches-v143.txt \
+              tools/data/expected-v1.4.3.json \
+              installer/gui.py installer/cli.py ; do
+              test -e "$R/$p" || { echo "MISSING: $R/$p"; exit 1; }
+            done
+            echo "all bundled paths present"
+            echo "::endgroup::"
+
+            echo "::group::bundled python modules"
+            "$R/python/bin/python3" -c "import numpy, lz4, cryptography, fontTools, cffi, tkinter; print(\"python modules ok\")"
+            echo "::endgroup::"
+
+            echo "::group::the installer finds its own layout"
+            # layout.find() 是安装器一切路径的来源；release 模式下它必须认出这是 release 而不是源码树
+            cd "$R"
+            PYTHONDONTWRITEBYTECODE=1 "$R/python/bin/python3" -c "
+            from installer import layout
+            lay = layout.find()
+            assert not lay.dev, \"layout detected as dev mode\"
+            print(\"release:\", lay.release)
+            missing = lay.missing()
+            assert not missing, f\"missing: {missing}\"
+            print(\"layout.layout.missing() is empty -> the setup will pass its own check step\")
+            "
+            echo "::endgroup::"
+
+            echo "::group::bundled clang compiles and links against the bundled sysroot"
+            cd /tmp
+            cp "$R/installer/hostcheck.c" .
+            "$R/llvm/bin/clang" -O1 hostcheck.c -o hostcheck \
+              -I "$R/runtime/deps/include" --sysroot="$R/llvm/sysroot" -fuse-ld=lld -ldl
+            ./hostcheck
+            echo "::endgroup::"
+          '
+
+      # 安装器是 Tk 窗口程序。用 Xvfb 起一个虚拟显示，确认 GUI 真的能建出窗口并跑到
+      # 主循环（--selftest 会建窗口、走一遍状态机、然后自己退出），
+      # 这样能覆盖 Tcl/Tk 数据目录、libXft、fontconfig 与打包路径。
+      - name: Verify the setup GUI starts inside the sandbox
+        run: |
+          set -eu
+          # 容器内装 Xvfb（构建镜像基于 Fedora，优先 dnf）
+          if ! command -v Xvfb >/dev/null; then
+            dnf install -y xorg-x11-server-Xvfb || \
+              (microdnf install -y xorg-x11-server-Xvfb) || \
+              { echo "::warning::无法安装 Xvfb，跳过 GUI 冒烟测试"; exit 0; }
+          fi
+          Xvfb :99 -screen 0 1920x1080x24 >/tmp/xvfb.log 2>&1 &
+          XVFB_PID=$!
+          sleep 3
+          set +e
+          DISPLAY=:99 timeout 180 flatpak run --command=sh "${APP_ID}" -c '
+            set -eu
+            R=/app/share/totk-recomp
+            export TCL_LIBRARY="$R/python/lib/tcl9.0" TK_LIBRARY="$R/python/lib/tk9.0"
+            export PYTHONDONTWRITEBYTECODE=1
+            cd "$R"
+            # 建窗口 + 走一遍状态机（每种界面语言的所有页面）；结束时会自己退出
+            "$R/python/bin/python3" -m installer.gui --selftest
+          ' >/tmp/selftest.log 2>&1
+          RC=$?
+          set -e
+          kill "$XVFB_PID" 2>/dev/null || true
+          tail -40 /tmp/selftest.log
+          echo "selftest exit code: $RC"
+          # 0 = 全部页面建出来了；非 0 说明 Tk 在沙箱里起不来或页面断言失败
+          test "$RC" -eq 0 || { echo "::error::安装器 GUI 在沙箱内无法启动（退出码 $RC）"; exit 1; }
+
+      - name: Verify wrapped entry point resolves
+        run: |
+          set -eu
+          # 包装脚本本身在 Xvfb 下跑起来会打开窗口，这里只验证它的落点都对：
+          # 目标 python 存在、Tcl/Tk 数据目录存在、最后的 exec 指向正确。
+          flatpak run --command=sh "${APP_ID}" -c '
+            set -eu
+            sed -n "/^exec /p" /app/bin/totk-recomp-wrapper
+            test -x /app/share/totk-recomp/python/bin/python3
+            test -d /app/share/totk-recomp/python/lib/tcl9.0
+            test -d /app/share/totk-recomp/python/lib/tk9.0
+            echo "wrapper targets exist"
+          '
+          flatpak uninstall --user -y "${APP_ID}" || true
+
+      - name: Compute checksum
+        run: |
+          set -eu
+          sha256sum "${APP_ID}.flatpak" | tee sha256.txt
+          SHA=$(sha256sum "${APP_ID}.flatpak" | awk '{print $1}')
+          echo "SHA256_FULL=${SHA}  ${APP_ID}.flatpak" >> "$GITHUB_ENV"
+
+      - name: Generate release notes
+        run: |
+          set -eu
+          DATE=$(date +%Y%m%d)
+          TAG=v${TOTK_VERSION}-${DATE}
+          echo "TAG=${TAG}" >> "$GITHUB_ENV"
+          echo "RELEASE_TITLE=TotK Recomp ${TOTK_VERSION} Setup Flatpak (${TAG})" >> "$GITHUB_ENV"
+          {
+            echo "# TotK Recomp Setup Flatpak"
+            echo ""
+            echo "> 非官方 Flatpak 封装，直接打包上游官方 Linux AppImage Release，不做源码编译。"
+            echo ""
+            echo "## 安装方法"
+            echo ""
+            echo '```bash'
+            echo "# 下载 ${APP_ID}.flatpak 后："
+            echo "flatpak install --user ${APP_ID}.flatpak"
+            echo "flatpak run ${APP_ID}"
+            echo '```'
+            echo ""
+            echo "## 重要提示"
+            echo ""
+            echo "**本包不含任何游戏文件或密钥。** 你需要自备合法获得的《王国之泪》本体与更新（XCI/NSP/NSZ）"
+            echo "以及自己的 prod.keys。安装器会在你选择的目标目录里，用自带的 LLVM 工具链在本机把游戏编译出来"
+            echo "（约 20-40 分钟，取决于 CPU 核心数与磁盘）。"
+            echo ""
+            echo "编译完成后得到的是普通可执行文件 \`totk\`，它在沙箱之外，直接在该目录运行即可；"
+            echo "安装器窗口的 *Play / Open folder* 按钮也能直接启动它。"
+            echo ""
+            echo "运行要求：x86-64 CPU（有 AVX2 走默认构建，只有 SSE4.2 会自动退化为 v2 构建）、"
+            echo "Vulkan 1.3 显卡驱动、16 GB 内存、约 40 GB 空闲磁盘。"
+            echo ""
+            echo "## 说明"
+            echo ""
+            echo "| 项 | 值 |"
+            echo "|---|---|"
+            echo "| 应用 ID | \`${APP_ID}\` |"
+            echo "| 上游版本 | TotK Recomp **${TOTK_VERSION}** |"
+            echo "| 运行时 | org.freedesktop.Platform 25.08 |"
+            echo "| 构建来源 | 上游官方 \`TotK-Setup-x86_64-${TOTK_VERSION}-linux.AppImage\` |"
+            echo ""
+            echo "## 沙箱内的路径"
+            echo ""
+            echo '```'
+            echo "/app/share/totk-recomp   # 上游 release 树（python/、llvm/、recomp/、tools/、runtime/、bin/）"
+            echo "~/.var/app/${APP_ID}/data/.local/state/totk-recomp/setup.json   # 上次使用的游戏文件路径"
+            echo '```'
+            echo ""
+            echo "游戏安装目录由你在安装器里选（默认在家目录中），不受沙箱约束。"
+            echo ""
+            echo "## 文件校验 (SHA256)"
+            echo '```'
+            echo "${SHA256_FULL}"
+            echo '```'
+            echo ""
+            echo "## 上游项目"
+            echo ""
+            echo "- 源码: https://github.com/${UPSTREAM_REPO}"
+          } > release.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_ID }}-flatpak
+          path: ${{ env.APP_ID }}.flatpak
+          retention-days: 14
+
+      - name: Release
+        if: github.event_name == 'workflow_dispatch' && inputs.create_release || github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ env.TAG }}
+          name: ${{ env.RELEASE_TITLE }}
+          body_path: ${{ github.workspace }}/release.txt
+          files: ${{ github.workspace }}/${{ env.APP_ID }}.flatpak
+          overwrite_files: true

@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.jcleng.TotKRecomp</id>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+
+  <name>TotK Recomp Setup</name>
+  <summary>Build Tears of the Kingdom for this PC from your own game files</summary>
+
+  <description>
+    <p>
+      TotK Recomp is a static recompilation of The Legend of Zelda: Tears of the Kingdom
+      (Nintendo Switch) into a native PC application. This is its setup program: it reads your
+      own dump of the game, translates and compiles it for this machine, and prepares the
+      shader cache so the first launch does not stutter.
+    </p>
+    <p>
+      This is an unofficial Flatpak wrapper around the official upstream Linux AppImage release.
+      It packages the installer as-is.
+    </p>
+    <p>
+      IMPORTANT: This package contains no game files, keys, firmware or dumping tools. You must
+      supply your own legally obtained copy of the game (base game and update, as XCI, NSP or NSZ)
+      and your own prod.keys, dumped from your own console. The setup then recompiles the game
+      locally with the bundled toolchain; the result is a normal executable in the folder you
+      choose, which you run as-is from outside the sandbox.
+    </p>
+    <p>
+      Requirements: an x86-64 CPU with AVX2 for the default build (an SSE4.2-only CPU gets a
+      slower build), a GPU with a Vulkan 1.3 driver, 16 GB of RAM and about 40 GB of free disk
+      space for the build.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">io.github.jcleng.TotKRecomp.desktop</launchable>
+
+  <url type="homepage">https://github.com/valentderah/totk-pc-recomp</url>
+  <url type="bugtracker">https://github.com/valentderah/totk-pc-recomp/issues</url>
+  <url type="vcs-browser">https://github.com/valentderah/totk-pc-recomp</url>
+
+  <developer id="io.github.jcleng">
+    <name>Flatpak packaging: jcleng; upstream: valentderah and the TotK Recomp contributors</name>
+  </developer>
+
+  <categories>
+    <category>Game</category>
+    <category>ActionGame</category>
+  </categories>
+
+  <keywords>
+    <keyword>zelda</keyword>
+    <keyword>tears</keyword>
+    <keyword>kingdom</keyword>
+    <keyword>totk</keyword>
+    <keyword>switch</keyword>
+  </keywords>
+
+  <content_rating type="oars-1.1">
+    <content_attribute id="violence-fantasy">moderate</content_attribute>
+  </content_rating>
+
+  <releases>
+    <release version="0.3.13" date="2026-11-09">
+      <description>
+        <p>Packages the upstream TotK Recomp 0.3.13 Linux setup AppImage release.</p>
+      </description>
+    </release>
+  </releases>
+
+</component>

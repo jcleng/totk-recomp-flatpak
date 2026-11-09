@@ -1,0 +1,12 @@
+# flatpak-builder 产物
+build-dir/
+.flatpak-builder/
+repo/
+*.flatpak
+*.flatpak.part*
+
+# 构建中间物
+totk.squashfs
+appimage-root/
+TotK-Setup.appimage
+upstream.AppImage

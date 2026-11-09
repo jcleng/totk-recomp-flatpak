@@ -1,0 +1,57 @@
+#!/bin/sh
+# Wrapper for TotK Recomp inside Flatpak.
+#
+# 上游 AppImage 的入口只有一行：用自带的 Python 跑 installer.gui。所有资源（python/、
+# llvm/、recomp/、tools/、runtime/、bin/、data/）都由 installer/layout.py 相对
+# “installer/ 的上一级目录”定位，所以这里必须保持那棵树在 /app/share/totk-recomp 下不动，
+# 本脚本只做 Flatpak 需要的环境兜底，不做任何路径改写。
+
+set -eu
+
+ROOT=/app/share/totk-recomp
+APP_LIB=/app/lib
+
+# ---- 只读 /app 的处理 ----
+# 安装器在编译阶段会调用自带 Python 执行 tools/*.py。Python 默认要在源码目录旁边写
+# __pycache__，而 /app 在沙箱里是只读的。上游的 AppRun 也是这么做的（PYTHONDONTWRITEBYTECODE=1）。
+export PYTHONDONTWRITEBYTECODE=1
+
+# Tcl/Tk 数据目录：AppRun 里写死的两个变量，路径相对解包根。
+export TCL_LIBRARY="${ROOT}/python/lib/tcl9.0"
+export TK_LIBRARY="${ROOT}/python/lib/tk9.0"
+
+# 沙箱内 runtime 只带 C.UTF-8，没有 zh_CN locale 数据，强行设 zh_CN.UTF-8 会让
+# setlocale 失败。界面与游戏文本本身是 UTF-8，C.UTF-8 即可正常显示中文。
+: "${LANG:=C.UTF-8}"
+: "${LC_ALL:=C.UTF-8}"
+export LANG LC_ALL
+
+# Flatpak 中 XDG 路径由 runtime 注入：
+#   XDG_DATA_HOME  -> ~/.var/app/<id>/data
+#   XDG_STATE_HOME -> ~/.var/app/<id>/data/../.state（runtime 默认放到 ~/.var/app/<id>/config 旁边）
+# 安装器把「上次用的游戏文件路径」记在 $XDG_STATE_HOME/totk-recomp/setup.json，
+# 留空则由程序回落到 $HOME/.local/state —— 在沙箱里那是真实家目录，同样可写，
+# 这里显式指到沙箱数据区，卸载包时状态可一起清掉。
+: "${XDG_STATE_HOME:=${HOME}/.local/state}"
+export XDG_STATE_HOME
+mkdir -p "${XDG_STATE_HOME}"
+
+# 兜底：确保私有库（runpath $ORIGIN 之外的顺序）能被找到
+LD_LIBRARY_PATH="${APP_LIB}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+export LD_LIBRARY_PATH
+
+# 安装器用到的工具优先用自带的（ninja、hactool、totk_xlate 都在 bin/ 下，
+# 上游也是通过绝对路径调用它们；这里加进 PATH 只是为了偶尔的手工排查）
+PATH="${ROOT}/bin:${ROOT}/python/bin:${PATH}"
+export PATH
+
+# 安装阶段会并行编译上万个文件，沙箱内 /tmp 是私有 tmpfs，大工程临时文件不适合放那里。
+# 上游 Linux release 的默认临时目录也就在安装目录里的 .setup-temp（见 installer/cli.py），
+# 所以这里不覆盖 TMPDIR，保持上游行为。
+
+# ---- 参数分派 ----
+# totk-recomp-wrapper                 -> 安装器窗口（默认）
+# totk-recomp-wrapper --rebuild DIR   -> 给某个安装目录重建（游戏内切换 code cheats 时会调）
+# 其它参数原样交给安装器 CLI（--help 等）。
+exec "${ROOT}/python/bin/python3" -m installer.gui \
+     --root "${ROOT}" "$@"

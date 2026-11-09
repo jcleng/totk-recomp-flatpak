@@ -1,0 +1,147 @@
+# Flatpak manifest for TotK Recomp (Tears of the Kingdom static recompilation setup)
+#
+# 构建方式：直接解包上游官方 Linux AppImage Release，不做源码编译。
+# 上游项目：https://github.com/valentderah/totk-pc-recomp
+#
+# 说明：本包不包含任何《塞尔达传说：王国之泪》的游戏文件或密钥。
+# 用户必须自行提供合法获得的本体与更新（XCI/NSP/NSZ）以及 prod.keys，
+# 安装器首次运行时会要求选择这些文件，并在本机把游戏重新编译出来。
+id: io.github.jcleng.TotKRecomp
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+command: totk-recomp-wrapper
+
+finish-args:
+  # 安装器是 Tk 窗口，游戏是 Vulkan 窗口：x11 + wayland 都开
+  - --socket=x11
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  # 音频
+  - --socket=pulseaudio
+  # 显卡：Vulkan 1.3（安装器的宿主检查与游戏渲染都需要）
+  - --device=dri
+  # 手柄：/dev/input 与 hidraw（--device=all 是访问它们的必要条件）
+  - --device=all
+  # 游戏文件（XCI/NSP、prod.keys、固件）几乎一定在用户目录里，编译产物也写在那里。
+  # 用 home 而不是 host：只需要用户自己的目录，不必暴露系统文件。
+  - --filesystem=home
+  # 本包本体是只读的 /app，但安装器需要在本机写编译产物，
+  # 这些全部落在用户选择的安装目录（在家目录里）与沙箱数据目录，不会碰 /app。
+  # 沙箱默认只有 C.UTF-8；安装器界面与游戏文本都是 UTF-8，C.UTF-8 足够，
+  # 强行设 zh_CN.UTF-8 会因为 runtime 里没有对应 locale 数据而让 setlocale 失败。
+  - --env=LANG=C.UTF-8
+  - --env=LC_ALL=C.UTF-8
+
+modules:
+  # Freedesktop SDK 不自带 unsquashfs，单独构建后用于解包 AppImage
+  # （解包完成后由 totk-recomp 模块在清理阶段删除）
+  - name: squashfs-tools
+    buildsystem: simple
+    build-commands:
+      - make -C squashfs-tools LZO_SUPPORT=0 XZ_SUPPORT=0 LZ4_SUPPORT=0 \
+          ZSTD_SUPPORT=1 GZIP_SUPPORT=1
+      - install -Dm755 squashfs-tools/unsquashfs /app/bin/unsquashfs
+    sources:
+      - type: archive
+        url: https://github.com/plougher/squashfs-tools/archive/refs/tags/4.6.1.tar.gz
+        sha256: 9c4974e07c61547dae14af4ed1f358b7d04618ae194e54d6be72ee126f0d2f53
+
+  - name: totk-recomp
+    buildsystem: simple
+    build-commands:
+      # 1. 解包 AppImage（offset 由 --appimage-offset 动态取得，按字节精确切分）
+      - |
+        set -eu
+        # file source 下载后不带可执行位，必须先 chmod
+        chmod +x ./TotK-Setup.appimage
+        OFFSET=$(./TotK-Setup.appimage --appimage-offset)
+        echo "AppImage squashfs offset = ${OFFSET}"
+        python3 - "${OFFSET}" <<'PYEOF'
+        import sys
+        off = int(sys.argv[1])
+        with open('TotK-Setup.appimage', 'rb') as src, open('totk.squashfs', 'wb') as dst:
+            src.seek(off)
+            while True:
+                chunk = src.read(1 << 20)
+                if not chunk:
+                    break
+                dst.write(chunk)
+        PYEOF
+        unsquashfs -q -d appimage-root totk.squashfs
+
+      # 2. 整棵 release 树装到 /app/share/totk-recomp
+      #    安装器靠「installer/ 的上一级目录」定位全部资源（python/、llvm/、recomp/、
+      #    tools/、runtime/、bin/、data/），目录布局必须原样保留，不能拆散。
+      - |
+        set -eu
+        install -d ${FLATPAK_DEST}/share/totk-recomp
+        # AppRun/.DirIcon/*.desktop/*.png 是 AppImage 外壳，真正的 release 内容是这些顶层项
+        for d in python llvm recomp tools runtime bin data licenses installer; do
+          cp -a "appimage-root/${d}" ${FLATPAK_DEST}/share/totk-recomp/
+        done
+        cp -a appimage-root/VERSION appimage-root/THIRD_PARTY_NOTICES.md \
+              appimage-root/totk.ini.example ${FLATPAK_DEST}/share/totk-recomp/
+
+      # 3. 自检：安装器第一次运行时 layout.py 会逐个 stat 这些路径，缺一个就直接报
+      #    "release incomplete"。在这里先查，把问题留在构建日志里而不是用户机器上。
+      - |
+        set -eu
+        R=${FLATPAK_DEST}/share/totk-recomp
+        for p in \
+          python/bin/python3 \
+          llvm/bin/clang llvm/bin/lld llvm/sysroot \
+          bin/totk_xlate bin/ninja bin/hactool bin/libSDL3.so.0 \
+          data/shader_list.tsv \
+          runtime/libtotkrt.a runtime/libtotkrt-v2.a \
+          runtime/deps/include/vulkan/vulkan.h \
+          runtime/deps/include/vma/vk_mem_alloc.h \
+          runtime/deps/lib/libzstd.a \
+          tools/extract.py tools/build_game.py tools/prepare_shaders.py \
+          tools/pack_shader_cache.py tools/make_romfs_patches.py \
+          tools/ultrawide_layout.py tools/button_icons.py tools/ncz.py \
+          tools/vendor/macnativegames/extract_shared_fonts.py \
+          recomp/gen.py recomp/patches-v110.txt recomp/patches-v121.txt recomp/patches-v143.txt \
+          tools/data/expected-v1.1.0.json tools/data/expected-v1.2.1.json tools/data/expected-v1.4.3.json \
+          installer/gui.py installer/cli.py ; do
+          test -e "$R/$p" || { echo "MISSING: $R/$p" >&2; exit 1; }
+        done
+        # 链接要用的系统头（vk_mem_alloc 走 deps，但 glibc 头与 libvulkan/libSDL3 链接桩来自 sysroot）
+        test -d "$R/llvm/sysroot/usr/include"
+        test -e "$R/llvm/sysroot/usr/lib/x86_64-linux-gnu/libvulkan.so"
+        "$R/python/bin/python3" -c 'import numpy, lz4, cryptography, fontTools, cffi; print("bundled python modules ok")'
+
+      # 4. 图标与桌面入口
+      - install -Dm644 io.github.jcleng.TotKRecomp.png
+        ${FLATPAK_DEST}/share/icons/hicolor/256x256/apps/io.github.jcleng.TotKRecomp.png
+      - install -Dm644 io.github.jcleng.TotKRecomp.desktop
+        ${FLATPAK_DEST}/share/applications/io.github.jcleng.TotKRecomp.desktop
+      - install -Dm644 io.github.jcleng.TotKRecomp.metainfo.xml
+        ${FLATPAK_DEST}/share/metainfo/io.github.jcleng.TotKRecomp.metainfo.xml
+
+      # 5. 启动包装脚本（唯一入口）
+      - install -Dm755 totk-recomp-wrapper ${FLATPAK_DEST}/bin/totk-recomp-wrapper
+
+      # 6. 许可证
+      - install -Dm644 appimage-root/licenses/llvm-LICENSE.txt
+        ${FLATPAK_DEST}/share/licenses/totk-recomp/llvm-LICENSE.txt
+
+      # 7. 清理：不保留 AppImage 外层壳、解包中间物与只在构建期用到的 unsquashfs
+      - rm -rf totk.squashfs appimage-root
+      - rm -f ${FLATPAK_DEST}/bin/unsquashfs
+
+    sources:
+      - type: file
+        url: https://github.com/valentderah/totk-pc-recomp/releases/download/v0.3.13/TotK-Setup-x86_64-0.3.13-linux.AppImage
+        sha256: b0c992f1e879401c119c796badc43687c3a5ac804d0d8c17f37fb16925f0e3ad
+        dest-filename: TotK-Setup.appimage
+      - type: file
+        path: icons/io.github.jcleng.TotKRecomp.png
+        dest-filename: io.github.jcleng.TotKRecomp.png
+      - type: file
+        path: io.github.jcleng.TotKRecomp.desktop
+      - type: file
+        path: io.github.jcleng.TotKRecomp.metainfo.xml
+      - type: file
+        path: totk-recomp-wrapper
