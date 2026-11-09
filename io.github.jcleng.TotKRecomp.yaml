@@ -116,7 +116,21 @@ modules:
         test -e "$R/llvm/sysroot/usr/lib/x86_64-linux-gnu/libvulkan.so"
         "$R/python/bin/python3" -c 'import numpy, lz4, cryptography, fontTools, cffi; print("bundled python modules ok")'
 
-      # 4. 图标与桌面入口
+      # 4. 预编译安装器自己的 Python 包
+      #    上游 installer/recent.py 的 docstring 里有一个无效转义（%LOCALAPPDATA%\TotK Recomp\...），
+      #    Python 3.12+ 在**编译该模块时**就报 SyntaxWarning。这个警告发生在 warnings 过滤器生效之前，
+      #    所以 PYTHONWARNINGS 在全新安装（没有 .pyc）时完全压不住。
+      #    构建期把字节码编好，运行时就不会再编译，警告自然不会出现，顺带去掉启动开销。
+      #    （运行时仍保持 PYTHONDONTWRITEBYTECODE=1，因为 /app 是只读的。）
+      - |
+        set -eu
+        R=${FLATPAK_DEST}/share/totk-recomp
+        "$R/python/bin/python3" -m compileall -q "$R/installer"
+        n=$(find "$R/installer" -name '*.pyc' | wc -l)
+        test "$n" -gt 0 || { echo "compileall produced no .pyc" >&2; exit 1; }
+        echo "precompiled $n bytecode files for installer/"
+
+      # 5. 图标与桌面入口
       - install -Dm644 io.github.jcleng.TotKRecomp.png
         ${FLATPAK_DEST}/share/icons/hicolor/256x256/apps/io.github.jcleng.TotKRecomp.png
       - install -Dm644 io.github.jcleng.TotKRecomp.desktop
@@ -124,14 +138,14 @@ modules:
       - install -Dm644 io.github.jcleng.TotKRecomp.metainfo.xml
         ${FLATPAK_DEST}/share/metainfo/io.github.jcleng.TotKRecomp.metainfo.xml
 
-      # 5. 启动包装脚本（唯一入口）
+      # 6. 启动包装脚本（唯一入口）
       - install -Dm755 totk-recomp-wrapper ${FLATPAK_DEST}/bin/totk-recomp-wrapper
 
-      # 6. 许可证
+      # 7. 许可证
       - install -Dm644 appimage-root/licenses/llvm-LICENSE.txt
         ${FLATPAK_DEST}/share/licenses/totk-recomp/llvm-LICENSE.txt
 
-      # 7. 清理：不保留 AppImage 外层壳、解包中间物与只在构建期用到的 unsquashfs
+      # 8. 清理：不保留 AppImage 外层壳、解包中间物与只在构建期用到的 unsquashfs
       - rm -rf totk.squashfs appimage-root
       - rm -f ${FLATPAK_DEST}/bin/unsquashfs
 

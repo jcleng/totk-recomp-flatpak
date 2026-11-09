@@ -142,6 +142,11 @@ jobs:
 
             echo "::group::bundled python modules"
             "$R/python/bin/python3" -c "import numpy, lz4, cryptography, fontTools, cffi, tkinter; print(\"python modules ok\")"
+            # installer/ 必须已在构建期预编译：否则运行时才会首次编译，而上游 recent.py 的无效转义
+            # 会在那时刷出 SyntaxWarning（PYTHONWARNINGS 压不住编译期警告）
+            n=$(find "$R/installer" -name '*.pyc' | wc -l)
+            echo "installer bytecode files: $n"
+            test "$n" -gt 0 || { echo "::error::installer/ was not precompiled at build time"; exit 1; }
             echo "::endgroup::"
 
             echo "::group::the installer finds its own layout"

@@ -188,14 +188,13 @@ gh release view v0.3.13 -R valentderah/totk-pc-recomp --json assets \
 | 构建期自检 | manifest 里逐项 `test -e`，并 `import numpy, lz4, cryptography, fontTools, cffi` |
 | 沙箱内工具链 | 上面那串路径再查一遍，然后调 `layout.find().missing()`，要求返回空 |
 | 沙箱内编译 | 用**包内自带** clang + `--sysroot=llvm/sysroot` + `-fuse-ld=lld` 把 `installer/hostcheck.c` 真的编出来，运行并打印 Vulkan 探测结果 |
-| 沙箱内 GUI | 装 Xvfb 起 `:99`，跑 `python -m installer.gui --selftest`：它会建出真窗口、把每一种界面语言的每一页都渲染一遍并断言、然后自己退出，退出码 0 才算通过；同时要求输出里不能出现 `SyntaxWarning` |
+| 沙箱内 GUI | 装 Xvfb 起 `:99`，跑**真实的包装脚本** `flatpak run <app> --selftest`（不是绕开 wrapper 直接调 python）：它会建出真窗口、把每一种界面语言的每一页都渲染一遍并断言、然后自己退出，退出码 0 才算通过；同时要求输出里不能出现 `SyntaxWarning` |
 | Wayland-only | 关键一步：**抽掉** `DISPLAY`、只留 `WAYLAND_DISPLAY`，跑完整的 `totk-recomp-wrapper`，要求窗口能起、输出里没有 `no display name`/`TclError`。上一步显式设了 `DISPLAY=:99`，永远测不到这一场景 |
 
 这几层覆盖了 Flatpak 封装最容易踩的坑：只读 `/app` 导致 Python 写不了 `__pycache__`、
 Tcl/Tk 数据目录没设对、`libXft.so.2` 在沙箱里找不到、以及 sysroot 里缺链接期依赖。
 
 ## 为什么这样做（可行性依据）
-
 封装前对 AppImage 0.3.13 做了实际拆包分析：
 
 | 检查项 | 结果 | 影响 |
@@ -213,6 +212,20 @@ Tcl/Tk 数据目录没设对、`libXft.so.2` 在沙箱里找不到、以及 sysr
 | 游戏文件是否内含 | 否 | 只有工具链、脚本与着色器列表 |
 | 网络需求 | 仅 Windows 的 `--dlss`（下载 `nvngx_dlss.dll`） | Linux 构建路径全程离线；`--share=network` 仍开着，便于将来上游加检查更新 |
 | 体积 | AppImage 230 MB，解包约 830 MB（`llvm/` 545 MB、`python/` 187 MB、`runtime/` 72 MB） | 全部是编译必需，不能裁 |
+
+### 为什么构建期要预编译 installer/ 的字节码
+
+上游 `installer/recent.py` 的模块 docstring 里有一个反斜杠路径（`%LOCALAPPDATA%\TotK Recomp\setup.json`），
+在非 raw 字符串里就是无效转义。Python 3.12+ 会在**编译该模块时**抛 `SyntaxWarning`。
+
+关键细节：这是**编译期**警告，发生在 warnings 过滤器生效**之前**，所以：
+
+- `PYTHONWARNINGS="ignore:invalid escape sequence"` 在**全新安装（没有 `.pyc`）时完全无效**
+- 一旦有 `.pyc` 缓存，就再也不会出现
+
+所以在清单里用 `compileall` 把 `installer/` 在构建期编好，用户启动时就不会再触发编译，
+警告自然不会出现（顺带省掉启动开销）。运行时仍保持 `PYTHONDONTWRITEBYTECODE=1`，因为 `/app` 只读。
+CI 里有一条断言：`installer/**/*.pyc` 必须存在，且 selftest 输出里不能出现 `SyntaxWarning`。
 
 ## 本仓库结构
 

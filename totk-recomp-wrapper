@@ -17,9 +17,10 @@ APP_LIB=/app/lib
 export PYTHONDONTWRITEBYTECODE=1
 
 # 上游 installer/recent.py 的模块 docstring 里写了一个反斜杠路径（%LOCALAPPDATA%\TotK Recomp\setup.json），
-# 在非 raw 字符串里就是无效转义，Python 3.12+ 每次启动都会刷一条 SyntaxWarning。
-# 功能完全无害，但在用户终端里看着像出了错。这里只按消息过滤这一条，不改动 /app 里的上游代码，
-# 其它 SyntaxWarning（包括将来上游真写错的）仍然照常输出。
+# 在非 raw 字符串里就是无效转义，Python 3.12+ 会在**编译该模块时**报 SyntaxWarning。
+# 注意：这种编译期警告发生在 warnings 过滤器生效之前，PYTHONWARNINGS 在全新安装（没有 .pyc）时压不住，
+# 所以真正的修法是在构建期预编译（见清单里的 compileall 步骤）。这里保留过滤作为双保险，
+# 并对跑在临时目录里的 tools/*.py 同样生效。
 export PYTHONWARNINGS="ignore:invalid escape sequence"
 
 # Tcl/Tk 数据目录：AppRun 里写死的两个变量，路径相对解包根。
