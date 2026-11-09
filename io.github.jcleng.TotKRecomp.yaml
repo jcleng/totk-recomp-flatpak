@@ -13,10 +13,14 @@ sdk: org.freedesktop.Sdk
 command: totk-recomp-wrapper
 
 finish-args:
-  # 安装器是 Tk 窗口，游戏是 Vulkan 窗口：x11 + wayland 都开
+  # 安装器窗口是 Tk 9。Tk 9 **没有 Wayland 后端**（libtcl9tk9.0.so 里 "wayland" 出现 0 次），
+  # 只能走 X11，在 Wayland 桌面上就是 XWayland。所以这里绝不能只用 --socket=fallback-x11：
+  # fallback-x11 的语义是「只在没有 wayland socket 时才给 x11」，而 --socket=wayland 同时开着时，
+  # Flatpak 就不会转发 X11，沙箱里 DISPLAY 为空，tk.Tk() 直接抛
+  # "no display name and no $DISPLAY environment variable"。
+  # 正确做法：x11 与 wayland 都无条件给出（XWayland 由桌面提供），game 实体是 SDL3，两者都支持。
   - --socket=x11
   - --socket=wayland
-  - --socket=fallback-x11
   - --share=ipc
   # 音频
   - --socket=pulseaudio

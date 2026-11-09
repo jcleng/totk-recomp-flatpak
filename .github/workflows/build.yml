@@ -199,6 +199,46 @@ jobs:
           echo "selftest exit code: $RC"
           # 0 = 全部页面建出来了；非 0 说明 Tk 在沙箱里起不来或页面断言失败
           test "$RC" -eq 0 || { echo "::error::安装器 GUI 在沙箱内无法启动（退出码 $RC）"; exit 1; }
+          # 上游 recent.py 的 docstring 无效转义 warning 不应刷到用户终端
+          if grep -q 'SyntaxWarning' /tmp/selftest.log; then
+            echo "::error::输出里仍然有 SyntaxWarning（上游 recent.py 的无效转义未被过滤）"
+            exit 1
+          fi
+
+      # 上一个步骤显式设了 DISPLAY=:99，所以它永远测不到真实的 Wayland-only 场景。
+      # 这里把 DISPLAY 拿掉、只留 WAYLAND_DISPLAY，走一遍完整的包装脚本：
+      # 这能捕获 --socket=fallback-x11 那种「Wayland 下不给 X11，Tk 直接报
+      # no display name and no $DISPLAY」的回归，以及 X socket 自动探测是否真的生效。
+      - name: Verify the wrapper works on a Wayland-only session
+        run: |
+          set -eu
+          if ! command -v Xvfb >/dev/null; then
+            dnf install -y xorg-x11-server-Xvfb || \
+              (microdnf install -y xorg-x11-server-Xvfb) || \
+              { echo "::warning::无法安装 Xvfb，跳过 Wayland-only 测试"; exit 0; }
+          fi
+          Xvfb :99 -screen 0 1920x1080x24 >/tmp/xvfb2.log 2>&1 &
+          XVFB_PID=$!
+          sleep 3
+          set +e
+          # 关键：不给 DISPLAY，模拟 Wayland 会话。wrapper 应当自己从 /tmp/.X11-unix/X* 探测出来。
+          timeout 25 flatpak run --env=WAYLAND_DISPLAY=wayland-0 \
+                    --unset-env=DISPLAY \
+                    "${APP_ID}" </dev/null >/tmp/wayland.log 2>&1
+          RC=$?
+          set -e
+          kill "$XVFB_PID" 2>/dev/null || true
+          tail -30 /tmp/wayland.log
+          echo "wrapper exit code: $RC (124 = 窗口正常运行直到超时，即成功)"
+          # 124 是 timeout 杀掉的，说明窗口一直在正常跑；其它值都是启动失败
+          test "$RC" -eq 124 || {
+            echo "::error::Wayland-only 环境下安装器窗口起不来（退出码 $RC）"
+            exit 1
+          }
+          if grep -qE 'no display name|no \$DISPLAY|TclError' /tmp/wayland.log; then
+            echo "::error::Wayland-only 环境下 Tk 报找不到显示"
+            exit 1
+          fi
 
       - name: Verify wrapped entry point resolves
         run: |

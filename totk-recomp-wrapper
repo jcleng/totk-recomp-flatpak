@@ -16,9 +16,41 @@ APP_LIB=/app/lib
 # __pycache__，而 /app 在沙箱里是只读的。上游的 AppRun 也是这么做的（PYTHONDONTWRITEBYTECODE=1）。
 export PYTHONDONTWRITEBYTECODE=1
 
+# 上游 installer/recent.py 的模块 docstring 里写了一个反斜杠路径（%LOCALAPPDATA%\TotK Recomp\setup.json），
+# 在非 raw 字符串里就是无效转义，Python 3.12+ 每次启动都会刷一条 SyntaxWarning。
+# 功能完全无害，但在用户终端里看着像出了错。这里只按消息过滤这一条，不改动 /app 里的上游代码，
+# 其它 SyntaxWarning（包括将来上游真写错的）仍然照常输出。
+export PYTHONWARNINGS="ignore:invalid escape sequence"
+
 # Tcl/Tk 数据目录：AppRun 里写死的两个变量，路径相对解包根。
 export TCL_LIBRARY="${ROOT}/python/lib/tcl9.0"
 export TK_LIBRARY="${ROOT}/python/lib/tk9.0"
+
+# ---- 显示 ----
+# 安装器窗口是 Tk 9，它**没有 Wayland 后端**（libtcl9tk9.0.so 里搜不到任何 "wayland" 符号），
+# 只能走 X11。在 Wayland 桌面上这意味着必须通过 XWayland，否则 tk.Tk() 会直接抛：
+#   _tkinter.TclError: no display name and no $DISPLAY environment variable
+#
+# 正常情况下 Flatpak 在给出 --socket=x11 时会注入 DISPLAY（指向 XWayland 的显示号），
+# 只有一种情况会空：XWayland 的显示号不是 :0（比如桌面已经在 :1 上跑过别的 X 服务）。
+# 这里把常见兜底写进候选列表逐个试，全部不行才报错，错误信息直接指向解决办法。
+if [ -z "${DISPLAY:-}" ]; then
+    # 直接看 X socket 目录里实际有哪个（XWayland 的显示号由桌面决定，不一定是 :0）
+    for sock in /tmp/.X11-unix/X*; do
+        [ -S "$sock" ] || continue
+        num=${sock##*/X}
+        DISPLAY=":${num}"
+        break
+    done
+    if [ -z "${DISPLAY:-}" ]; then
+        echo "totk-recomp-wrapper: 找不到可用的 X11 显示（XWayland）。" >&2
+        echo "totk-recomp-wrapper: 安装器窗口基于 Tk 9，它不支持 Wayland，只能跑在 XWayland 上。" >&2
+        echo "totk-recomp-wrapper: 请确认桌面的 XWayland 已启用；若显示号不是 :0，可手动指定：" >&2
+        echo "totk-recomp-wrapper:   flatpak run --env=DISPLAY=:1 ${FLATPAK_ID:-io.github.jcleng.TotKRecomp}" >&2
+        exit 1
+    fi
+fi
+export DISPLAY
 
 # 沙箱内 runtime 只带 C.UTF-8，没有 zh_CN locale 数据，强行设 zh_CN.UTF-8 会让
 # setlocale 失败。界面与游戏文本本身是 UTF-8，C.UTF-8 即可正常显示中文。

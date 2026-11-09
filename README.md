@@ -76,6 +76,33 @@ flatpak run io.github.jcleng.TotKRecomp
 
 ## 常见问题
 
+**Wayland 桌面下报 `no display name and no $DISPLAY environment variable`？**
+
+0.3.13 的第一版包有这个问题，已在当前版本修复；如果还遇到，先 `flatpak update` 到最新 Release。
+
+原因值得记一下：安装器窗口用的是 **Tk 9，它没有 Wayland 后端**（`libtcl9tk9.0.so` 里搜不到任何
+`wayland` 符号，`tk windowingsystem` 只会返回 `x11`）。所以纯 Wayland 会话下必须走 XWayland。
+
+第一版清单里同时写了 `--socket=x11` 和 `--socket=fallback-x11`，而 `fallback-x11` 的语义是
+「**只在没有 wayland socket 时**才给 x11」——两者同时存在时 Flatpak 不转发 X11，
+沙箱里 `DISPLAY` 就是空的，`tk.Tk()` 直接抛异常。修法是 `x11` 与 `wayland` 都**无条件**给出，
+包装脚本再加一层兜底：`DISPLAY` 为空时自己扫描 `/tmp/.X11-unix/X*` 取实际显示号
+（XWayland 的显示号不一定是 `:0`）。
+
+自查：
+
+```bash
+flatpak run --command=sh io.github.jcleng.TotKRecomp -c 'echo "DISPLAY=${DISPLAY:-EMPTY}"; ls /tmp/.X11-unix'
+```
+
+若 `DISPLAY` 仍为空且 `/tmp/.X11-unix` 里没有任何 socket，说明桌面的 XWayland 没开，手动指定显示号：
+
+```bash
+flatpak run --env=DISPLAY=:1 io.github.jcleng.TotKRecomp
+```
+
+**【注意】** 这个问题**不影响编译出来的游戏**：`totk` 是 SDL3 程序，原生支持 Wayland 与 X11。
+
 **安装器窗口是英文，能改中文吗？**
 能。安装器界面支持 `en`、`ru`、`pt-BR`、`zh-Hans` 四种语言，默认跟随系统 locale（Flatpak 里是 `C.UTF-8`，所以会落到英文）。
 包装脚本会把参数透传给安装器，直接指定即可：
@@ -161,7 +188,8 @@ gh release view v0.3.13 -R valentderah/totk-pc-recomp --json assets \
 | 构建期自检 | manifest 里逐项 `test -e`，并 `import numpy, lz4, cryptography, fontTools, cffi` |
 | 沙箱内工具链 | 上面那串路径再查一遍，然后调 `layout.find().missing()`，要求返回空 |
 | 沙箱内编译 | 用**包内自带** clang + `--sysroot=llvm/sysroot` + `-fuse-ld=lld` 把 `installer/hostcheck.c` 真的编出来，运行并打印 Vulkan 探测结果 |
-| 沙箱内 GUI | 装 Xvfb 起 `:99`，跑 `python -m installer.gui --selftest`：它会建出真窗口、把每一种界面语言的每一页都渲染一遍并断言、然后自己退出，退出码 0 才算通过 |
+| 沙箱内 GUI | 装 Xvfb 起 `:99`，跑 `python -m installer.gui --selftest`：它会建出真窗口、把每一种界面语言的每一页都渲染一遍并断言、然后自己退出，退出码 0 才算通过；同时要求输出里不能出现 `SyntaxWarning` |
+| Wayland-only | 关键一步：**抽掉** `DISPLAY`、只留 `WAYLAND_DISPLAY`，跑完整的 `totk-recomp-wrapper`，要求窗口能起、输出里没有 `no display name`/`TclError`。上一步显式设了 `DISPLAY=:99`，永远测不到这一场景 |
 
 这几层覆盖了 Flatpak 封装最容易踩的坑：只读 `/app` 导致 Python 写不了 `__pycache__`、
 Tcl/Tk 数据目录没设对、`libXft.so.2` 在沙箱里找不到、以及 sysroot 里缺链接期依赖。
@@ -179,7 +207,7 @@ Tcl/Tk 数据目录没设对、`libXft.so.2` 在沙箱里找不到、以及 sysr
 | 链接期依赖 | 全部在 `llvm/sysroot` 内：`libc/libm/libdl/libpthread`(2.31)、`libvulkan.so`、`libSDL3.so`、`libopus.a`、`libvpx.a`；`libzstd.a` 在 `runtime/deps/lib` | 编译**不依赖宿主/沙箱的系统库**，产物也不依赖沙箱 |
 | VMA / Vulkan 头 | `runtime/deps/include/{vulkan,vma}` 随包 | 不会触发上游「首次运行联网抓 `vk_mem_alloc.h`」的路径 |
 | Python | python-build-standalone + numpy/lz4/cryptography/fontTools/cffi | 自足，无需沙箱 Python |
-| Tk | `python/lib/libtcl9tk9.0.so` 需要 `libXft.so.2`、`libfontconfig.so.1`、`libfreetype.so.6`、`libX11.so.6`；前者的 `libXft.so.2`/`libXrender.so.1` **随包自带**，靠主程序 RPATH `$ORIGIN/../lib` 命中 | 其余由 freedesktop runtime 提供，沙箱内可正常起 GUI |
+| Tk | `python/lib/libtcl9tk9.0.so` 需要 `libXft.so.2`、`libfontconfig.so.1`、`libfreetype.so.6`、`libX11.so.6`；前者的 `libXft.so.2`/`libXrender.so.1` **随包自带**，靠主程序 RPATH `$ORIGIN/../lib` 命中。**Tk 9 没有 Wayland 后端**，只能走 X11/XWayland | 其余由 freedesktop runtime 提供。清单里 x11 与 wayland 必须都无条件给出（不能只用 `fallback-x11`），否则 Wayland 会话下 `DISPLAY` 为空、Tk 启动失败 |
 | glibc 需求 | `clang` 2.34、`totk_xlate` 2.29、`python3.14` 2.17 | Freedesktop 25.08 满足 |
 | 配置路径 | 遵循 `XDG_STATE_HOME`（`$XDG_STATE_HOME/totk-recomp/setup.json`） | Flatpak 自动沙箱化到 `~/.var/app/` |
 | 游戏文件是否内含 | 否 | 只有工具链、脚本与着色器列表 |
