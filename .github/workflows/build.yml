@@ -294,9 +294,12 @@ jobs:
             echo "::endgroup::"
 
             echo "::group::totk-extract-fonts reaches the tool via the bundled Python"
-            /app/bin/totk-extract-fonts --help | head -3
-            /app/bin/totk-extract-fonts --help | grep -q "--firmware"
-            /app/bin/totk-extract-fonts --help | grep -q "--xci"
+            # 注意：pattern 以 -- 开头，必须用 `grep -q -- "--x"` 把选项与模式隔开，
+            # 否则 grep 把 --firmware 当成自己的选项直接报 usage。
+            OUT=$(/app/bin/totk-extract-fonts --help)
+            echo "$OUT" | head -3
+            echo "$OUT" | grep -q -- "--firmware"
+            echo "$OUT" | grep -q -- "--xci"
             echo "::endgroup::"
 
             echo "::group::tool imports its sibling modules"
