@@ -86,6 +86,27 @@ jobs:
           PY
           grep -n -A3 'type: file' "${APP_ID}.yaml" | head -12
 
+      # appstreamcli 要到构建末尾（已花十几分钟）才报 metainfo 错误，报过 "metainfo-parsing-error"。
+      # 把风险点提前卡住：XML 注释里不能出现 "--"（XML 规范禁止，写 --env= 这类命令行就会中招）、
+      # 文件必须能解析、组件只能有一个 launchable。
+      - name: Lint metainfo before the long build
+        run: |
+          set -eu
+          python3 - <<'PY'
+          import re, sys, xml.etree.ElementTree as ET
+          p = "io.github.jcleng.TotKRecomp.metainfo.xml"
+          src = open(p, encoding="utf-8").read()
+          for i, line in enumerate(src.splitlines(), 1):
+              for m in re.finditer(r"<!--(.*?)-->", line):
+                  if "--" in m.group(1):
+                      sys.exit(f"{p}:{i}: XML 注释不能包含 '--'：{m.group(1)!r}")
+          root = ET.parse(p).getroot()
+          ls = root.findall("launchable")
+          if len(ls) != 1:
+              sys.exit(f"{p}: 期望 1 个 launchable，实际 {len(ls)} 个")
+          print("metainfo ok: well-formed, 1 launchable, no '--' in comments")
+          PY
+
       - name: Build Flatpak
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
