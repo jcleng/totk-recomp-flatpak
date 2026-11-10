@@ -1,0 +1,34 @@
+#!/bin/sh
+# Extract the Switch system shared fonts (BFTTF) needed for Chinese/Korean/Traditional
+# Chinese UI text, using the Python that ships with the release.
+#
+# The release bundles its own Python at $ROOT/python (RPATH $ORIGIN/../lib, sys.path derived
+# from its own location), and `cryptography` is installed there. The runtime's /usr/bin/python3
+# is a different interpreter with no cryptography, which is why calling the script with plain
+# `python3` fails inside the sandbox. Always go through this wrapper.
+#
+# Usage (inside the sandbox):
+#   flatpak run --command=totk-extract-fonts io.github.jcleng.TotKRecomp \
+#       --keys /path/to/prod.keys --firmware /path/to/firmware --output <game>/shared-fonts
+#
+# The fonts must end up in <game>/shared-fonts/ (the same place the setup puts them when you
+# pick Chinese and pass --firmware). totk-play's TOTK_GAME_DIR does not apply here; pass
+# --output explicitly with the real path, since the game folder is outside /app.
+
+set -eu
+
+ROOT=/app/share/totk-recomp
+TOOL="${ROOT}/tools/vendor/macnativegames/extract_shared_fonts.py"
+
+if [ ! -f "${TOOL}" ]; then
+    echo "totk-extract-fonts: ${TOOL} not found" >&2
+    exit 1
+fi
+
+# __pycache__ / 缓存不可写：/app 在沙箱里是只读的，和安装器入口保持一致
+export PYTHONDONTWRITEBYTECODE=1
+
+# 自带 Python 的 stdlib 动态模块需要它自己的 lib 在 RPATH 里（已经写好），
+# 但 libcrypto/libssl 由 runtime 提供，显式把 runtime 的路径保留在前面即可（默认就有）。
+
+exec "${ROOT}/python/bin/python3" "${TOOL}" "$@"

@@ -144,6 +144,8 @@ modules:
       # 6. 启动包装脚本（安装器入口）与游戏启动脚本（沙箱内运行游戏）
       - install -Dm755 totk-recomp-wrapper ${FLATPAK_DEST}/bin/totk-recomp-wrapper
       - install -Dm755 totk-play ${FLATPAK_DEST}/bin/totk-play
+      # 字体提取工具入口：用 release 自带的 Python（带 cryptography），不是 runtime 的 python3
+      - install -Dm755 totk-extract-fonts ${FLATPAK_DEST}/bin/totk-extract-fonts
 
       # 7. 许可证
       - install -Dm644 appimage-root/licenses/llvm-LICENSE.txt
@@ -171,3 +173,5 @@ modules:
         path: totk-recomp-wrapper
       - type: file
         path: totk-play
+      - type: file
+        path: totk-extract-fonts

@@ -273,6 +273,45 @@ jobs:
             echo "wrapper targets exist"
           '
 
+      # 中文/韩文界面需要 Switch 固件里的 BFTTF 字体，提取工具靠 release 自带的 cryptography。
+      # runtime 的 /usr/bin/python3 没有这个模块（用户报过 ModuleNotFoundError），
+      # 所以 totk-extract-fonts 必须用自带的 Python。这里在沙箱内把它真的跑起来。
+      - name: Verify the font extractor runs with the bundled Python
+        run: |
+          set -eu
+          flatpak run --command=sh "${APP_ID}" -c '
+            set -eu
+            echo "::group::runtime python3 has no cryptography (expected)"
+            if /usr/bin/python3 -c "import cryptography" 2>/dev/null; then
+              echo "::warning::runtime python3 unexpectedly provides cryptography"
+            else
+              echo "confirmed: /usr/bin/python3 cannot import cryptography"
+            fi
+            echo "::endgroup::"
+
+            echo "::group::bundled python provides cryptography"
+            /app/share/totk-recomp/python/bin/python3 -c "import cryptography; print(\"cryptography\", cryptography.__version__)"
+            echo "::endgroup::"
+
+            echo "::group::totk-extract-fonts reaches the tool via the bundled Python"
+            /app/bin/totk-extract-fonts --help | head -3
+            /app/bin/totk-extract-fonts --help | grep -q "--firmware"
+            /app/bin/totk-extract-fonts --help | grep -q "--xci"
+            echo "::endgroup::"
+
+            echo "::group::tool imports its sibling modules"
+            # extract_exefs/extract_romfs 是脚本的本地依赖，路径放错就会 ImportError
+            /app/share/totk-recomp/python/bin/python3 -c "
+            import sys
+            sys.path.insert(0, \"/app/share/totk-recomp/tools/vendor/macnativegames\")
+            import extract_shared_fonts as m
+            print(\"fonts wanted:\", len(m.FONTS))
+            assert len(m.FONTS) == 6
+            "
+            echo "::endgroup::"
+            echo "font extractor is usable inside the sandbox"
+          '
+
       # 游戏入口 totk-play 的关键行为：必须把游戏目录放在 LD_LIBRARY_PATH 最前面。
       # 游戏的 RUNPATH 是 $ORIGIN，但 LD_LIBRARY_PATH 优先于 RUNPATH，而 runtime 带的是更新版的
       # libSDL3.so.0（0.2.30 vs release 的 4.4.18）。顺序写反了就会用错 SDL。这里直接断言顺序，

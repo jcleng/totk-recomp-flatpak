@@ -160,6 +160,33 @@ flatpak run io.github.jcleng.TotKRecomp --lang zh-Hans
 中文/韩文/繁体界面文字需要 Switch 固件里的系统字体（BFTTF）。在上游的 `--firmware` 一栏
 指定固件目录（`Contents/registered`）和 `prod.keys` 后，安装器会在安装目录的 `shared-fonts/` 里生成。
 
+如果游戏已经编译完了（不想为了字体重跑一遍十几分钟的编译），单独提取字体就行。
+字体必须落在 **`<游戏目录>/shared-fonts/`**（和安装器的产物位置一致）：
+
+```bash
+# 用安装器自带的 Python，不要用系统的 python3（下面解释）
+flatpak run --command=totk-extract-fonts io.github.jcleng.TotKRecomp \
+  --keys /path/to/prod.keys \
+  --firmware /path/to/firmware \
+  --output /path/to/game/shared-fonts
+```
+
+用游戏卡带镜像（xci）也行，把 `--firmware` 换成 `--xci /path/to/game.xci`。
+注意 `--output` 指向的目录**必须不存在**（脚本自己会建）。
+
+提取成功的标志是 `shared-fonts/` 里有 `0-standard.bfttf` … `5-nintendo-extension.bfttf`
+和 `manifest.json` 共 7 个文件，然后游戏里就能选中文了。
+
+> **为什么不能用 `python3` 直接跑那个脚本？**
+> 沙箱里的 `/usr/bin/python3` 是 runtime 的，没有 `cryptography`，直接跑会报
+> `ModuleNotFoundError: No module named 'cryptography'`。release 自带的 Python 在
+> `/app/share/totk-recomp/python/`（`cryptography` 装在那里），`totk-extract-fonts`
+> 就是用它跑脚本的入口。
+
+只支持 `--firmware`（解包好的固件 NCA 目录 / 模拟器的 `Contents/registered`）和 `--xci`（卡带镜像）；
+**NSP 不行**，NSP 里不带系统字体（字体在那 6 个系统数据 title 的 NCA 里，
+如简中在 `0100000000000814`）。
+
 **Flatpak 里编译，和直接在宿主上跑 AppImage 有区别吗？**
 有一点：沙箱内的 glibc 来自 `org.freedesktop.Platform` 25.08，而游戏用包内自带的
 `llvm/sysroot`（glibc 2.31，Steam Runtime 的那套）编译与链接，所以**产物不依赖沙箱**，
@@ -227,6 +254,7 @@ gh release view v0.3.13 -R valentderah/totk-pc-recomp --json assets \
 | 沙箱内 GUI | 装 Xvfb 起 `:99`，跑**真实的包装脚本** `flatpak run <app> --selftest`（不是绕开 wrapper 直接调 python）：它会建出真窗口、把每一种界面语言的每一页都渲染一遍并断言、然后自己退出，退出码 0 才算通过；同时要求输出里不能出现 `SyntaxWarning` |
 | X11 授权 | 断言 flatpak 元数据里 `sockets=` 含 `x11` **且不含 `fallback-x11`** —— 按 flatpak 文档，`fallback-x11` 让 X11 「只在没有 wayland socket 时可用」且两者共存时优先，Tk 9 没有 Wayland 后端，一旦带上它 Wayland 桌面下就必然启动失败。另在沙箱内确认 `DISPLAY` 非空、`/tmp/.X11-unix` 可见 |
 | 游戏入口 | `totk-play` 的 `LD_LIBRARY_PATH` 必须以游戏目录开头（否则游戏自带的 SDL3 会被 runtime 的覆盖）、必须 `cd` 到游戏目录；再用一个假游戏目录实跑一遍验证行为；缺目录/缺 `totk` 必须报错而非静默失败 |
+| 字体工具 | 断言沙箱内 `/usr/bin/python3` **不能** `import cryptography`、自带的 Python **能**，并真的用 `totk-extract-fonts` 跑一遍 `--help`；再确认脚本能 import 同级的 `extract_exefs`/`extract_romfs`（路径写错就 ImportError） |
 
 这几层覆盖了 Flatpak 封装最容易踩的坑：只读 `/app` 导致 Python 写不了 `__pycache__`、
 Tcl/Tk 数据目录没设对、`libXft.so.2` 在沙箱里找不到、以及 sysroot 里缺链接期依赖。
@@ -270,6 +298,7 @@ CI 里有一条断言：`installer/**/*.pyc` 必须存在，且 selftest 输出�
 io.github.jcleng.TotKRecomp.yaml          # Flatpak 清单（核心）
 totk-recomp-wrapper                       # 安装器启动包装（环境兜底 + 固定 Tcl/Tk 路径）
 totk-play                                 # 游戏启动脚本（沙箱内运行，TOTK_GAME_DIR 指定位置）
+totk-extract-fonts                        # 提取中文/韩文字体的入口（用 release 自带的 Python）
 io.github.jcleng.TotKRecomp.desktop       # 桌面入口：安装器
 io.github.jcleng.TotKRecomp.play.desktop  # 桌面入口：游戏（TotK）
 io.github.jcleng.TotKRecomp.metainfo.xml  # AppStream 元数据
