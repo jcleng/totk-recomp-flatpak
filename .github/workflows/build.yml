@@ -292,9 +292,10 @@ jobs:
 
           # 2. 行为断言：造一个假的游戏目录，抄一份真的 libSDL3.so.0 进去，
           #    看 totk-play 实际跑起来时 LD_LIBRARY_PATH 是不是游戏目录在前（用 totk 替身打印环境）。
+          #    注意用 /tmp 而不是 $HOME：CI 里 $HOME=/github/home 不可写。
           flatpak run --command=sh "${APP_ID}" -c '
             set -eu
-            GAME="$HOME/totk-play-test"
+            GAME=/tmp/totk-play-test
             rm -rf "$GAME"; mkdir -p "$GAME"
             # 替身 totk：把 LD_LIBRARY_PATH 第一段和当前目录打出来
             printf "#!/bin/sh\necho \"FIRST=\${LD_LIBRARY_PATH%%:*}\"\necho \"CWD=\$(pwd)\"\n" > "$GAME/totk"
