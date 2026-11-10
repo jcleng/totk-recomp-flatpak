@@ -48,19 +48,50 @@ flatpak run io.github.jcleng.TotKRecomp
 运行要求：x86-64 CPU（有 AVX2 走默认 v3 构建，只有 SSE4.2 会自动退化为 v2 构建）、
 **Vulkan 1.3** 显卡驱动、16 GB 内存、约 40 GB 空闲磁盘（RomFS + 编译中间物 + 着色器缓存）。
 
-## 编译完成之后
+## 编译完成之后：两种启动方式
 
-安装器会在你选的目录里生成普通可执行文件 `totk` 与 `libSDL3.so.0`。**它在沙箱外面，直接运行即可**：
+安装器会在你选的目录里生成普通可执行文件 `totk` 与 `libSDL3.so.0`。
+
+### 方式一：直接从宿主机运行（普通发行版，推荐）
 
 ```bash
 ~/Games/TotK/totk
 ```
 
-安装器窗口完成页的 *Play* 按钮同样会直接启动它（沙箱对家目录有读写权限，所以能执行到）。
-之后再玩不需要打开 Flatpak ——游戏是普通 Linux 程序，`totk.ini` 放在 `totk` 旁边，
-所有图形/分辨率/手柄设置见上游的 `totk.ini.example`。
+这是最干净的做法：游戏就是个普通 Linux 程序，不进任何沙箱。安装器完成页的 *Play* 按钮也是这么做的
+（`subprocess.Popen([dest/totk])`）。
 
-> 想给游戏加 Steam / 桌面快捷方式，直接指向 `totk` 的绝对路径即可。
+### 方式二：在沙箱内运行（NixOS 等宿主无法直接运行它的系统）
+
+NixOS 不提供 `/lib64/ld-linux-x86-64.so.2`，而游戏二进制的 PT_INTERP 写死了这个路径，
+直接跑会报 `NixOS cannot run dynamically linked executables`。这时可以用本包提供的
+**第二个菜单项 `TotK`**，它在沙箱内启动游戏（借用 runtime 的 glibc）。
+
+先告诉它游戏装在哪（**只需要设置一次**，菜单启动也能生效）：
+
+```bash
+flatpak override --user --env=TOTK_GAME_DIR=/home/jcleng/work/mywork/yuzu/gg io.github.jcleng.TotKRecomp
+```
+
+然后从应用菜单点 **TotK**，或：
+
+```bash
+flatpak run --command=totk-play io.github.jcleng.TotKRecomp
+```
+
+`TOTK_GAME_DIR` 指向**含有 `totk` 的那个目录**（不是父目录）。也可以用环境变量临时覆盖：
+
+```bash
+flatpak run --env=TOTK_GAME_DIR=/path/to/game --command=totk-play io.github.jcleng.TotKRecomp
+```
+
+游戏会在该目录里写 `logs/`、`shader-cache/`、`mesa-cache/`、`profile/`、`build-cache/`，
+并读写同目录的 `totk.ini` ——与从宿主机直接运行完全一致（沙箱对家目录有读写权限）。
+
+> 沙箱内运行的注意事项：`totk-play` 把**游戏目录放在 `LD_LIBRARY_PATH` 最前面**，
+> 这样游戏自带的 `libSDL3.so.0`（release 编译时用的 4.4.18）会优先于 runtime 的 0.2.30。
+> 这一步是必需的：`LD_LIBRARY_PATH` 优先于可执行文件的 `RUNPATH($ORIGIN)`，顺序写反就会用错 SDL。
+> CI 里有断言守着这行代码。
 
 ## 数据与路径
 
@@ -195,6 +226,7 @@ gh release view v0.3.13 -R valentderah/totk-pc-recomp --json assets \
 | 沙箱内编译 | 用**包内自带** clang + `--sysroot=llvm/sysroot` + `-fuse-ld=lld` 把 `installer/hostcheck.c` 真的编出来，运行并打印 Vulkan 探测结果 |
 | 沙箱内 GUI | 装 Xvfb 起 `:99`，跑**真实的包装脚本** `flatpak run <app> --selftest`（不是绕开 wrapper 直接调 python）：它会建出真窗口、把每一种界面语言的每一页都渲染一遍并断言、然后自己退出，退出码 0 才算通过；同时要求输出里不能出现 `SyntaxWarning` |
 | X11 授权 | 断言 flatpak 元数据里 `sockets=` 含 `x11` **且不含 `fallback-x11`** —— 按 flatpak 文档，`fallback-x11` 让 X11 「只在没有 wayland socket 时可用」且两者共存时优先，Tk 9 没有 Wayland 后端，一旦带上它 Wayland 桌面下就必然启动失败。另在沙箱内确认 `DISPLAY` 非空、`/tmp/.X11-unix` 可见 |
+| 游戏入口 | `totk-play` 的 `LD_LIBRARY_PATH` 必须以游戏目录开头（否则游戏自带的 SDL3 会被 runtime 的覆盖）、必须 `cd` 到游戏目录；再用一个假游戏目录实跑一遍验证行为；缺目录/缺 `totk` 必须报错而非静默失败 |
 
 这几层覆盖了 Flatpak 封装最容易踩的坑：只读 `/app` 导致 Python 写不了 `__pycache__`、
 Tcl/Tk 数据目录没设对、`libXft.so.2` 在沙箱里找不到、以及 sysroot 里缺链接期依赖。
@@ -236,8 +268,10 @@ CI 里有一条断言：`installer/**/*.pyc` 必须存在，且 selftest 输出�
 
 ```
 io.github.jcleng.TotKRecomp.yaml          # Flatpak 清单（核心）
-totk-recomp-wrapper                       # 启动包装脚本（环境兜底 + 固定 Tcl/Tk 路径）
-io.github.jcleng.TotKRecomp.desktop       # 桌面入口
+totk-recomp-wrapper                       # 安装器启动包装（环境兜底 + 固定 Tcl/Tk 路径）
+totk-play                                 # 游戏启动脚本（沙箱内运行，TOTK_GAME_DIR 指定位置）
+io.github.jcleng.TotKRecomp.desktop       # 桌面入口：安装器
+io.github.jcleng.TotKRecomp.play.desktop  # 桌面入口：游戏（TotK）
 io.github.jcleng.TotKRecomp.metainfo.xml  # AppStream 元数据
 icons/io.github.jcleng.TotKRecomp.png     # 图标（256x256，取自上游 totk-setup.png）
 .github/workflows/build.yml               # GitHub Actions 构建 + 验证 + 自动 Release

@@ -1,0 +1,55 @@
+#!/bin/sh
+# Launcher for the game that the setup built, run INSIDE the Flatpak sandbox.
+#
+# The game lives wherever the player chose during the setup (TOTK_GAME_DIR, set with
+# `flatpak override --env=TOTK_GAME_DIR=...`, which desktop launches inherit). It is a
+# plain host binary that a NixOS or similar host cannot start directly, so wrapping it in
+# the sandbox is a way to give it a glibc it can run on.
+#
+# Two things matter here, both verified against the 0.3.13 release:
+#
+#  1. The game's folder must come FIRST in LD_LIBRARY_PATH. The game links `libSDL3.so.0`
+#     with RUNPATH $ORIGIN, but LD_LIBRARY_PATH beats RUNPATH, and the runtime ships a much
+#     newer libSDL3.so.0 (0.2.30 against the release's 4.4.18). Letting the runtime's copy
+#     win replaces the SDL the game was built against. Putting the game folder first makes
+#     the bundled libSDL3.so.0 win, which is what the release expects.
+#
+#  2. Run from the game folder: the game reads totk.ini, romfs-index.bin, romfs-patches*/
+#     and writes logs/, shader-cache/, mesa-cache/, profile/ and build-cache/ relative to
+#     its own folder.
+
+set -eu
+
+: "${TOTK_GAME_DIR:=${HOME}/Games/TotK}"
+GAME="${TOTK_GAME_DIR%/}"
+
+if [ ! -d "${GAME}" ]; then
+    echo "totk-play: 游戏目录不存在: ${GAME}" >&2
+    echo "totk-play: 用安装器装好游戏后，指定它的位置（目录里应当有 totk）：" >&2
+    echo "totk-play:   flatpak override --user --env=TOTK_GAME_DIR=/path/to/game io.github.jcleng.TotKRecomp" >&2
+    exit 1
+fi
+if [ ! -x "${GAME}/totk" ]; then
+    echo "totk-play: ${GAME} 里没有可执行的 totk" >&2
+    echo "totk-play: 先运行“TotK Recomp Setup”完成编译，或用 TOTK_GAME_DIR 指向正确的目录。" >&2
+    exit 1
+fi
+
+# 1. the game's own libSDL3.so.0 (and anything else beside totk) wins over the runtime's
+LD_LIBRARY_PATH="${GAME}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+export LD_LIBRARY_PATH
+
+# The runtime is C.UTF-8 only; the game decodes its own UTF-8 text, and TOTK_LANG picks the
+# game language. Leave both alone unless the caller set them.
+: "${LANG:=C.UTF-8}"
+export LANG
+
+# Mesa's shader cache from the sandbox GL extension: keep it inside the game folder so it
+# survives with the install and stays writable.
+: "${MESA_SHADER_CACHE_DIR:=${GAME}/mesa-cache}"
+export MESA_SHADER_CACHE_DIR
+mkdir -p "${MESA_SHADER_CACHE_DIR}" 2>/dev/null || true
+
+# 2. run from the game folder
+cd "${GAME}"
+exec ./totk "$@"

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=TotK
+GenericName=The Legend of Zelda: Tears of the Kingdom
+Comment=Play the build made by TotK Recomp Setup
+Exec=totk-play
+Icon=io.github.jcleng.TotKRecomp
+Terminal=false
+Type=Application
+Categories=Game;ActionGame;
+Keywords=zelda;tears;kingdom;totk;switch;recomp;
+StartupNotify=true
+StartupWMClass=totk

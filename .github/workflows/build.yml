@@ -251,6 +251,49 @@ jobs:
             test -d /app/share/totk-recomp/python/lib/tk9.0
             echo "wrapper targets exist"
           '
+
+      # 游戏入口 totk-play 的关键行为：必须把游戏目录放在 LD_LIBRARY_PATH 最前面。
+      # 游戏的 RUNPATH 是 $ORIGIN，但 LD_LIBRARY_PATH 优先于 RUNPATH，而 runtime 带的是更新版的
+      # libSDL3.so.0（0.2.30 vs release 的 4.4.18）。顺序写反了就会用错 SDL。这里直接断言顺序，
+      # 并用一个假的游戏目录实际跑一遍（不需要真游戏）。
+      - name: Verify totk-play puts the game folder first in LD_LIBRARY_PATH
+        run: |
+          set -eu
+          # 1. 静态断言①：赋值行把 $GAME 放在自己的前面
+          flatpak run --command=sh "${APP_ID}" -c '
+            set -eu
+            grep -n "^LD_LIBRARY_PATH=" /app/bin/totk-play
+            grep -q "^LD_LIBRARY_PATH=\"\${GAME}" /app/bin/totk-play || {
+              echo "totk-play does not put the game folder first in LD_LIBRARY_PATH"; exit 1; }
+            grep -q "^cd \"\${GAME}\"" /app/bin/totk-play || {
+              echo "totk-play does not cd into the game folder"; exit 1; }
+          '
+
+          # 2. 行为断言：造一个假的游戏目录，抄一份真的 libSDL3.so.0 进去，
+          #    看 totk-play 实际跑起来时 LD_LIBRARY_PATH 是不是游戏目录在前（用 totk 替身打印环境）。
+          flatpak run --command=sh "${APP_ID}" -c '
+            set -eu
+            GAME="$HOME/totk-play-test"
+            rm -rf "$GAME"; mkdir -p "$GAME"
+            # 替身 totk：把 LD_LIBRARY_PATH 第一段和当前目录打出来
+            printf "#!/bin/sh\necho \"FIRST=\${LD_LIBRARY_PATH%%:*}\"\necho \"CWD=\$(pwd)\"\n" > "$GAME/totk"
+            chmod +x "$GAME/totk"
+            OUT=$(TOTK_GAME_DIR="$GAME" /app/bin/totk-play)
+            echo "$OUT"
+            echo "$OUT" | grep -qx "FIRST=$GAME" || { echo "::error::LD_LIBRARY_PATH does not start with the game folder"; exit 1; }
+            echo "$OUT" | grep -qx "CWD=$GAME"     || { echo "::error::totk-play did not run from the game folder"; exit 1; }
+            rm -rf "$GAME"
+            echo "totk-play orders LD_LIBRARY_PATH and cwd correctly"
+          '
+
+          # 3. 缺目录 / 缺 totk 时报错而不是静默失败
+          flatpak run --command=sh "${APP_ID}" -c '
+            set -eu
+            if TOTK_GAME_DIR=/nonexistent-totk-dir /app/bin/totk-play 2>/dev/null; then
+              echo "::error::totk-play accepted a missing game folder"; exit 1
+            fi
+            echo "missing folder is rejected"
+          '
           flatpak uninstall --user -y "${APP_ID}" || true
 
       - name: Compute checksum

@@ -137,9 +137,13 @@ modules:
         ${FLATPAK_DEST}/share/applications/io.github.jcleng.TotKRecomp.desktop
       - install -Dm644 io.github.jcleng.TotKRecomp.metainfo.xml
         ${FLATPAK_DEST}/share/metainfo/io.github.jcleng.TotKRecomp.metainfo.xml
+      # 第二个桌面入口：在沙箱内运行安装器当时编出来的游戏（见 totk-play 开头的说明）
+      - install -Dm644 io.github.jcleng.TotKRecomp.play.desktop
+        ${FLATPAK_DEST}/share/applications/io.github.jcleng.TotKRecomp.play.desktop
 
-      # 6. 启动包装脚本（唯一入口）
+      # 6. 启动包装脚本（安装器入口）与游戏启动脚本（沙箱内运行游戏）
       - install -Dm755 totk-recomp-wrapper ${FLATPAK_DEST}/bin/totk-recomp-wrapper
+      - install -Dm755 totk-play ${FLATPAK_DEST}/bin/totk-play
 
       # 7. 许可证
       - install -Dm644 appimage-root/licenses/llvm-LICENSE.txt
@@ -162,4 +166,8 @@ modules:
       - type: file
         path: io.github.jcleng.TotKRecomp.metainfo.xml
       - type: file
+        path: io.github.jcleng.TotKRecomp.play.desktop
+      - type: file
         path: totk-recomp-wrapper
+      - type: file
+        path: totk-play
