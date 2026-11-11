@@ -334,6 +334,154 @@ jobs:
           '
           echo '::endgroup::'
 
+      # 游戏内菜单（Dear ImGui）的 CJK 字体：上游 plat_font_path() 只 stat 五个写死的
+      # /usr/share/fonts/... 路径（runtime/platform/linux.c:1254），沙箱里全部落空，
+      # 于是 menu.cpp 的 fonts_up() 一个字体都没合并，汉字全画成 '?'。
+      #
+      # 这条不能用「字体文件存在」或「fc-list 能查到」断言——两者在 bug 存在时也都成立
+      # （用户机器上就有 105 条宿主 CJK 字体而菜单依然全是问号）。唯一可信的判据是
+      # 把上游那两个函数（plat_file_exists + plat_file_read）逐字复刻出来，直接问它能不能
+      # 拿到字体，并且要求带 shim 时的答案从 0 变成 4。
+      - name: Verify the in-game menu can reach a CJK font
+        run: |
+          set -eu
+
+          echo '::group::shim is installed and carries the five upstream paths'
+          flatpak run --command=sh "${APP_ID}" -c '
+            set -eu
+            test -r /app/lib/totk-cjk-path.so || { echo "MISSING: /app/lib/totk-cjk-path.so"; exit 1; }
+            test -r /app/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc || { echo "MISSING font"; exit 1; }
+            for s in \
+              /usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc \
+              /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc \
+              /usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc \
+              /usr/share/fonts/noto/NotoSansCJK-Regular.ttc \
+              /usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc ; do
+              grep -qa -- "$s" /app/lib/totk-cjk-path.so || { echo "shim lacks $s"; exit 1; }
+            done
+            grep -q "LD_PRELOAD" /app/bin/totk-play || { echo "totk-play does not inject the shim"; exit 1; }
+            grep -q "totk-cjk-path.so" /app/bin/totk-play || { echo "totk-play does not name the shim"; exit 1; }
+            echo "ok: shim present, totk-play injects it"
+          '
+          echo '::endgroup::'
+
+          echo '::group::plat_font_path goes from 0 of 4 to 4 of 4'
+          flatpak run --command=sh "${APP_ID}" -c '
+            set -eu
+            R=/app/share/totk-recomp
+            cd /tmp
+            cat > mimic.c <<"CEOF"
+          /* The two upstream functions that decide the menu font, copied verbatim from
+             runtime/platform/linux.c (plat_file_exists + plat_file_read) and the loop of
+             menu.cpp fonts_up(). Kept in sync by hand; the point is to ask the game'
+             own question, not to test the shim in isolation. */
+          #include <stdio.h>
+          #include <string.h>
+          #include <sys/stat.h>
+          #include <fcntl.h>
+          #include <unistd.h>
+          #include <stdint.h>
+          #include <stdlib.h>
+          static int plat_file_exists(const char *path) {
+              struct stat st;
+              return !stat(path, &st) && !S_ISDIR(st.st_mode);
+          }
+          static int plat_font_path(const char *lang, char *out, size_t cap) {
+              static const char *files[] = {
+                  "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+                  "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+                  "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
+                  "/usr/share/fonts/noto/NotoSansCJK-Regular.ttc",
+                  "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+              };
+              if (strcmp(lang, "ja") && strcmp(lang, "ko") && strcmp(lang, "zh-Hans") && strcmp(lang, "zh-Hant")) return 0;
+              for (size_t i = 0; i < sizeof files / sizeof *files; i++)
+                  if (plat_file_exists(files[i])) return snprintf(out, cap, "%s", files[i]) < (int)cap;
+              return 0;
+          }
+          static uint8_t *plat_file_read(const char *path, uint64_t *size) {
+              int fd = open(path, O_RDONLY | O_CLOEXEC);
+              if (fd < 0) return NULL;
+              struct stat st; uint8_t *buf = NULL;
+              if (!fstat(fd, &st) && S_ISREG(st.st_mode) && st.st_size > 0 && st.st_size < (1ll << 30)) {
+                  buf = malloc((size_t)st.st_size + 1);
+                  size_t got = 0;
+                  while (buf && got < (size_t)st.st_size) {
+                      ssize_t k = read(fd, buf + got, (size_t)st.st_size - got);
+                      if (k <= 0) break;
+                      got += (size_t)k;
+                  }
+                  if (buf && got != (size_t)st.st_size) { free(buf); buf = NULL; }
+                  if (buf) { buf[st.st_size] = 0; *size = (uint64_t)st.st_size; }
+              }
+              close(fd);
+              return buf;
+          }
+          int main(void) {
+              const char *langs[] = {"ja", "ko", "zh-Hans", "zh-Hant"};
+              int merged = 0;
+              for (int i = 0; i < 4; i++) {
+                  char path[512]; uint64_t size = 0;
+                  if (!plat_font_path(langs[i], path, sizeof path) || !(plat_file_read(path, &size))) continue;
+                  merged++;
+              }
+              printf("merged=%d\n", merged);
+              return 0;
+          }
+          CEOF
+            "$R/llvm/bin/clang" -O1 --sysroot="$R/llvm/sysroot" -fuse-ld=lld -o mimic mimic.c
+
+            # 1. 不带 shim：必须重现 bug（0），否则说明这个测试没在测真东西
+            bare=$(./mimic)
+            echo "without shim: $bare"
+            test "$bare" = "merged=0" || {
+              echo "::error::expected merged=0 without the shim, got $bare"
+              exit 1; }
+
+            # 2. 带 shim：四个语言都必须拿到字体
+            fixed=$(LD_PRELOAD=/app/lib/totk-cjk-path.so ./mimic)
+            echo "with shim:    $fixed"
+            test "$fixed" = "merged=4" || {
+              echo "::error::the shim does not make the menu font reachable ($fixed)"
+              exit 1; }
+            echo "ok: 0 of 4 -> 4 of 4"
+          '
+          echo '::endgroup::'
+
+          echo '::group::the shim leaves every other path alone'
+          flatpak run --command=sh "${APP_ID}" -c '
+            set -eu
+            # 只改那五个字符串：相似路径、真实文件、不存在的路径都必须保持原样。
+            # 这是 shim 唯一的风险点（拦错路径会把游戏数据重定向走），所以单独验。
+            R=/app/share/totk-recomp
+            cd /tmp
+            cat > others.c <<"CEOF"
+          /* os.path.exists() equivalent, run with and without the shim. */
+          #include <stdio.h>
+          #include <string.h>
+          #include <sys/stat.h>
+          static int exists(const char *p) { struct stat st; return !stat(p, &st) && !S_ISDIR(st.st_mode); }
+          int main(void) {
+              static const struct { const char *p; int want; } k[] = {
+                  {"/app/share/totk-recomp/installer/gui.py", 1},
+                  {"/app/bin/totk-play", 1},
+                  {"/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc.bak", 0},
+                  {"/usr/share/fonts/noto-cjk/NotoSansCJK-Regular-Bold.ttc", 0},
+                  {"/nonexistent/nope", 0},
+              };
+              int bad = 0;
+              for (size_t i = 0; i < sizeof k / sizeof *k; i++)
+                  if (exists(k[i].p) != k[i].want) { printf("WRONG: %s\n", k[i].p); bad++; }
+              printf("unexpected rewrites: %d\n", bad);
+              return bad ? 1 : 0;
+          }
+          CEOF
+            "$R/llvm/bin/clang" -O1 --sysroot="$R/llvm/sysroot" -fuse-ld=lld -o others others.c
+            LD_PRELOAD=/app/lib/totk-cjk-path.so ./others
+            echo "ok: only the five upstream paths are rewritten"
+          '
+          echo '::endgroup::'
+
       # 上一个步骤显式设了 DISPLAY=:99，所以它永远测不到「Wayland 会话下 X11 被拿掉」这个回归。
       # 注意：不能用 --unset-env=DISPLAY 模拟——那等于「宿主根本没有 X server」，
       # 不是 Wayland 场景，而且沙箱里 /tmp/.X11-unix 是私有的，永远看不到宿主的 Xvfb。

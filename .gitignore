@@ -10,6 +10,8 @@ totk.squashfs
 appimage-root/
 TotK-Setup.appimage
 upstream.AppImage
+# totk-cjk-path.c 的编译产物（构建期由 clang 生成）
+totk-cjk-path.so
 
 # Python 缓存（本地跑 trim-noto-cjk-ttc.py 时产生）
 __pycache__/

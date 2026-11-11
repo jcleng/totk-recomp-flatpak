@@ -238,6 +238,33 @@ modules:
       # 字体提取工具入口：用 release 自带的 Python（带 cryptography），不是 runtime 的 python3
       - install -Dm755 totk-extract-fonts ${FLATPAK_DEST}/bin/totk-extract-fonts
 
+      # 6b. 游戏内 ImGui 菜单的 CJK 路径 shim
+      #     上游 runtime/platform/linux.c:1254 的 plat_font_path() 只在五个写死的绝对路径里找
+      #     /usr/share/fonts/.../NotoSansCJK-Regular.ttc，没有任何环境变量入口；Flatpak 沙箱里
+      #     这五个都不存在（/usr 是 runtime，字体在 /app/share/fonts），于是菜单里每个汉字都是 '?'。
+      #     这个 shim 只把这五个字符串重定向到本包的字体，其余路径原样透传（见 totk-cjk-path.c）。
+      #     用 release 自带的 clang + sysroot 编译（安装器本来就用这套工具链编译游戏，
+      #     所以构建镜像里一定有；不要用 SDK 自带 clang，免得版本漂移）。
+      - |
+        set -eu
+        R=${FLATPAK_DEST}/share/totk-recomp
+        "$R/llvm/bin/clang" -shared -fPIC -O2 -Wall -Wextra -Werror \
+          --sysroot="$R/llvm/sysroot" -fuse-ld=lld \
+          -o totk-cjk-path.so totk-cjk-path.c
+        install -Dm755 totk-cjk-path.so ${FLATPAK_DEST}/lib/totk-cjk-path.so
+        # 自检：shim 里必须出现那五条路径与目标字体，否则说明源码被改坏
+        for s in \
+          /usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc \
+          /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc \
+          /usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc \
+          /usr/share/fonts/noto/NotoSansCJK-Regular.ttc \
+          /usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc \
+          /app/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc ; do
+          grep -qa -- "$s" ${FLATPAK_DEST}/lib/totk-cjk-path.so || {
+            echo "totk-cjk-path.so does not carry $s" >&2; exit 1; }
+        done
+        echo "totk-cjk-path.so: $(du -h ${FLATPAK_DEST}/lib/totk-cjk-path.so | cut -f1)"
+
       # 7. 许可证
       - install -Dm644 appimage-root/licenses/llvm-LICENSE.txt
         ${FLATPAK_DEST}/share/licenses/totk-recomp/llvm-LICENSE.txt
@@ -262,6 +289,8 @@ modules:
         path: io.github.jcleng.TotKRecomp.play.desktop
       - type: file
         path: totk-recomp-wrapper
+      - type: file
+        path: totk-cjk-path.c
       - type: file
         path: totk-play
       - type: file

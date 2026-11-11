@@ -27,17 +27,23 @@ flatpak override --user --env=TOTK_GAME_DIR=/path/to/game io.github.jcleng.TotKR
 flatpak run --command=totk-play io.github.jcleng.TotKRecomp
 ```
 
-### 中文/韩文界面字体
+### 中文界面字体
 
-**安装器界面（设置窗口）的中文：本包已内置字体，无需任何操作。**
+**两处都无需操作：安装器窗口和游戏内菜单（设置界面）的中文都已内置字体。**
 
-以前设置界面的中文全是问号：上游安装器用的是 Tk 9，`installer/gui.py` 在 Linux 上把字体写死成
-`DejaVu Sans`，而 DejaVu 没有任何汉字，沙箱里又没有 CJK 字体可以让 fontconfig 回退，
-于是所有汉字都画成了问号。本版本把 Noto Sans CJK 装进 `/app/share/fonts`（fontconfig 会收录），
-并附一份规则让缺字时优先回退到简体字形（而不是日文字形），中文界面从此直接可用。
+安装器窗口（Tk 9）以前中文全是问号：上游 `installer/gui.py` 在 Linux 上把字体写死成
+`DejaVu Sans`，而 DejaVu 没有任何汉字，沙箱里又没有 CJK 字体可以让 fontconfig 回退。
+本版本把 Noto Sans CJK 装进 `/app/share/fonts`（fontconfig 会收录），
+并附一份规则让缺字时优先回退到简体字形（而不是日文字形）。
 
-**游戏内文本（简体/繁体中文、韩文）** 仍需 Switch 固件里的系统字体（BFTTF）。已编译完的话不用重装，
-直接提取到游戏目录的 `shared-fonts/`（目录必须尚不存在）：
+**游戏内菜单（设置界面）以前中文也是一串问号**（这一条之前没修）。原因不同：菜单是 Dear ImGui，
+它按上游写死的五个 `/usr/share/fonts/...` 绝对路径去找系统 CJK 字体，沙箱里一个都不存在，
+于是一个 CJK 字体都没合并，只装了拉丁字形的图集把每个汉字画成 `?`（英文正常）。
+本版本用一个路径重定向 shim 把字体送进去，游戏日志里的
+`language names from 0 of 4 system fonts` 现在会变成 `4 of 4`。
+
+**游戏内文本（简体/繁体中文、韩文）** 仍需 Switch 固件里的系统字体（BFTTF），与菜单字体无关。
+已编译完的话不用重装，直接提取到游戏目录的 `shared-fonts/`（目录必须尚不存在）：
 
 ```bash
 flatpak run --command=totk-extract-fonts io.github.jcleng.TotKRecomp \

@@ -109,18 +109,20 @@ flatpak run --env=TOTK_GAME_DIR=/path/to/game --command=totk-play io.github.jcle
 
 **设置界面里的中文全是问号？**
 
-已修复。根因不在本封装，而在**上游把界面字体写死成了 DejaVu**，而沙箱里原本没有任何 CJK 字体：
+已修复。**「设置界面」有两种，之前把两者混为一谈了，`c0beaca` 只修了错的那一个：**
 
-- 安装器窗口是 Tk 9（`installer/gui.py`），Linux 上走 Xft/fontconfig 渲染；
-- `gui.py` 在非 Windows 平台把字体写死为 `DejaVu Sans`（日志框 `DejaVu Sans Mono`）——
-  那是照着 Steam Runtime 写的，**DejaVu 一个汉字都没有**；
-- 汉字只能来自 fontconfig 的回退链，而 Flatpak 沙箱里既没有宿主字体，runtime 也不带 CJK 字体，
-  回退链只能拿一个画不出汉字的字体顶替，于是界面上所有中文都成了问号。
+| 界面 | 技术栈 | 之前的状态 |
+|---|---|---|
+| 编译前的**安装器窗口**（选游戏文件、跑编译） | Tk 9 + Xft/fontconfig | `c0beaca` 修的就是这个 |
+| 编译后**游戏内的设置菜单**（amiibo、Discord、各项开关） | Dear ImGui（`runtime/ui/`） | **真正一直在报问号的是这个，`c0beaca` 完全没碰到** |
 
-本包的处理是把 Noto Sans CJK 装进 `/app/share/fonts`（fontconfig 会收录这个目录），
-再用一份 fontconfig 规则让 DejaVu 缺字时**优先回退到简体字形**（否则按 locale 会落到日文 JP）。
-细节见「中文显示的实现」一节。
+所以如果你的截图是**游戏里按设置键弹出的那个菜单**（左上角一堆标签页、右边一栏说明文字、英文正常而中文是 `?`），
+那与 Tk、与 fontconfig 都没有关系。请直接看下面「游戏内设置菜单」一条。
 
+如果你指的是**安装器窗口**：那里的中文靠 Tk/Xft 渲染，上游 `installer/gui.py` 在非 Windows 平台把字体写死成
+`DejaVu Sans`（日志框 `DejaVu Sans Mono`，`gui.py:103-104`），而 DejaVu 不含任何汉字。
+本包把 Noto Sans CJK 装进 `/app/share/fonts`（`50-flatpak.conf` 里有 `<dir>/app/share/fonts</dir>`，
+fontconfig 自动收录），再用 `60-totk-cjk.conf` 让 DejaVu 缺字时优先回退到简体字形。
 自查：
 
 ```bash
@@ -131,16 +133,56 @@ flatpak run --command=sh io.github.jcleng.TotKRecomp -c '
 '
 ```
 
-**游戏内菜单里各语言的名称显示成方块？**
+**游戏内设置菜单里中文全是问号？**
 
-这是另一个与上游硬编码路径有关的问题，与安装器界面无关。上游 `runtime/ui/menu.cpp` 的
-`fonts_up()` 调 `plat_font_path()`（`runtime/platform/linux.c:1254`），后者**按文件名**在
-`/usr/share/fonts/...` 的五个固定路径里找 `NotoSansCJK-Regular.ttc`。Flatpak 里 `/usr` 只读且不含宿主字体，
-那个路径永远打不开，于是菜单在 ja/ko/zh-Hans/zh-Hant 下只能用内置 Roboto 的缺字框。
+已修复（这个才是真正的根因所在）。**问题不在字体缺失，也不在 Tk/fontconfig，而在上游写死的绝对路径**：
 
-这条路径没有环境变量入口（不像 Savage Wind 有 `SAVAGEWIND_MENU_FONT`），而本包不改二进制，
-所以暂不处理。影响面很小：只有菜单里的语言名那几行，游戏文本本身用的是 Switch 固件字体（
-经过 `totk-extract-fonts` 提取）。
+- 菜单文字 = 「一份拉丁小字（内嵌的 roboto）+ 从**系统字体**合并进来的 CJK 字形」，
+  见 `runtime/ui/menu.cpp` 的 `fonts_up()`：它调 `plat_font_path()` 拿路径，`plat_file_read()` 读文件，
+  再把字形合并进图集（`MergeMode = true`）；
+- `plat_font_path()`（`runtime/platform/linux.c:1254`）只 `stat` **五个写死的路径**，
+  没有任何环境变量、程序参数或配置文件能改：
+
+  ```c
+  static const char *files[] = {
+      "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+      "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+      "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
+      "/usr/share/fonts/noto/NotoSansCJK-Regular.ttc",
+      "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+  };
+  ```
+
+  这是普通 Linux 发行版（和 SteamOS）的布局，恰好是 Flatpak 里唯一不存在的那一种：
+  `/usr` 是 runtime 自己的（不带 CJK 字体）、本包只能写 `/app`、宿主字体在 `/run/host/fonts`；
+- 五个路径全部落空 → `merged` 为 0 → **一个 CJK 字体都没合并** → 只剩拉丁字形的图集，
+  每个汉字画成 `?`。英文（`amiibo`、`Discord Rich Presence`、版本号）由 roboto 正常渲染，
+  所以症状就是「英文正常 + 中文一串问号」。
+
+这一点必须要说清楚：**即使宿主装了 CJK 字体，这个 bug 依然存在**。
+例如 NixOS 会把 `/run/current-system/sw/share/X11/fonts` 挂进 `/run/host/fonts`，
+`fc-list | grep -ci cjk` 能数出 105 条（含 `NotoSansCJK-VF.otf.ttc`），
+安装器窗口的中文也完全正常 —— 但游戏菜单仍然全是问号，因为 `plat_font_path()` 不经过 fontconfig，
+它只认那五个绝对路径。所以「`fc-match` 能查到字体」不能用来判断这个问题是否修好。
+
+本包的做法：一个几十行的 `LD_PRELOAD` shim（`totk-cjk-path.c`，由 `totk-play` 注入）拦截
+`stat`/`stat64`/`__xstat`/`__xstat64`/`open`/`open64`/`fopen`，**只**在那五个字符串逐字匹配时
+重定向到本包的 `/app/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc`，其余任何路径原样透传
+（游戏数据、日志、shader 缓存、mods 不受影响）。不改上游二进制，也不需要最终用户装任何东西。
+
+自查（`4 of 4` = 已修好；`0 of 4` = 旧包的症状）：
+
+```bash
+grep 'menu: font atlas' ~/Games/TotK/logs/totk.log | tail -1
+```
+
+```
+[host] menu: font atlas at 43.3 px, language names from 0 of 4 system fonts   # 旧包：中文全是 ?
+[host] menu: font atlas at 43.3 px, language names from 4 of 4 system fonts   # 现在：中文正常
+```
+
+注意**不要**用 `font.measure()`、`fc-match` 或「字体文件存在」来判断 —— 这三者在 bug 存在时全部通过
+（见「为什么 CI 不用 fc-list 断言」一节）。
 
 **Wayland 桌面下报 `no display name and no $DISPLAY environment variable`？**
 
@@ -286,7 +328,8 @@ gh release view v0.3.13 -R valentderah/totk-pc-recomp --json assets \
 | 构建期自检 | manifest 里逐项 `test -e`，并 `import numpy, lz4, cryptography, fontTools, cffi` |
 | 沙箱内工具链 | 上面那串路径再查一遍，然后调 `layout.find().missing()`，要求返回空 |
 | 沙箱内编译 | 用**包内自带** clang + `--sysroot=llvm/sysroot` + `-fuse-ld=lld` 把 `installer/hostcheck.c` 真的编出来，运行并打印 Vulkan 探测结果 |
-| 沙箱内 GUI | 装 Xvfb 起 `:99`，跑**真实的包装脚本** `flatpak run <app> --selftest`（不是绕开 wrapper 直接调 python）：它会建出真窗口、把每一种界面语言的每一页都渲染一遍并断言、然后自己退出，退出码 0 才算通过；同时要求输出里不能出现 `SyntaxWarning` |
+| 沙箱内 GUI | 装 Xvfb 起 `:99`，跑**真实的包装脚本** `flatpak run <app> --selftest`（不是绕开 wrapper 直接调 python）：它会建出真窗口、把每一种界面语言的每一页都渲染一遍并断言、然后自己退出，退出码 0 才算通过；同时要求输出里不能出现 `SyntaxWarning`。**这只覆盖安装器窗口，不管游戏菜单** |
+| 游戏菜单字体 | 把上游 `plat_file_exists` + `plat_file_read` 逐字复刻成一个小程序，在沙箱里直接问它：不带 shim 必须 `merged=0`（重现 bug），带 shim 必须 `merged=4`；另外验证 `/app/...` 真实文件与 `.bak` 相似路径、不存在路径都不被 shim 改写 |
 | X11 授权 | 断言 flatpak 元数据里 `sockets=` 含 `x11` **且不含 `fallback-x11`** —— 按 flatpak 文档，`fallback-x11` 让 X11 「只在没有 wayland socket 时可用」且两者共存时优先，Tk 9 没有 Wayland 后端，一旦带上它 Wayland 桌面下就必然启动失败。另在沙箱内确认 `DISPLAY` 非空、`/tmp/.X11-unix` 可见 |
 | 游戏入口 | `totk-play` 的 `LD_LIBRARY_PATH` 必须以游戏目录开头（否则游戏自带的 SDL3 会被 runtime 的覆盖）、必须 `cd` 到游戏目录；再用一个假游戏目录实跑一遍验证行为；缺目录/缺 `totk` 必须报错而非静默失败 |
 | 字体工具 | 断言沙箱内 `/usr/bin/python3` **不能** `import cryptography`、自带的 Python **能**，并真的用 `totk-extract-fonts` 跑一遍 `--help`；再确认脚本能 import 同级的 `extract_exefs`/`extract_romfs`（路径写错就 ImportError） |
@@ -294,9 +337,24 @@ gh release view v0.3.13 -R valentderah/totk-pc-recomp --json assets \
 这几层覆盖了 Flatpak 封装最容易踩的坑：只读 `/app` 导致 Python 写不了 `__pycache__`、
 Tcl/Tk 数据目录没设对、`libXft.so.2` 在沙箱里找不到、以及 sysroot 里缺链接期依赖。
 
-### 中文显示的实现
+### 中文显示的实现：两个界面、两个完全不同的原因
 
-设置界面的中文曾经全是问号，排查后确认根因是**沙箱里根本没有 CJK 字体**，而不是编码问题：
+先说结论，因为这里曾经搞错过一次：**「设置界面中文变问号」有两个来源，而它们的技术栈、根因、修法完全不同。**
+`c0beaca` 只看见了第一个，就以为已经修完；用户实际报的是第二个。
+
+| | 安装器窗口（编译前） | 游戏内设置菜单（编译后） |
+|---|---|---|
+| 技术栈 | Tk 9 + Xft/fontconfig（`installer/gui.py`） | Dear ImGui（`runtime/ui/menu.cpp`） |
+| 字体从哪来 | fontconfig 的回退链 | 上游**自己 `stat` 五个写死的绝对路径** |
+| 真正的根因 | DejaVu 无 CJK 字形 + 沙箱无 CJK 字体 | `plat_font_path()` 的五个路径在 Flatpak 里全不存在 |
+| 修法 | 装字体到 `/app/share/fonts` + fontconfig 偏好规则 | `LD_PRELOAD` 路径 shim（`totk-cjk-path.c`） |
+| 受宿主字体影响 | 有（装了宿主 CJK 字体就能显示） | **没有**（不经过 fontconfig） |
+
+下面分两节说。
+
+#### 一、安装器窗口（Tk 9）
+
+这里的根因是**沙箱里没有可用的 CJK 字体**，而不是编码问题：
 
 | 事实 | 出处 |
 |---|---|
@@ -310,7 +368,7 @@ Tcl/Tk 数据目录没设对、`libXft.so.2` 在沙箱里找不到、以及 sysr
 1. **装字体到 `/app/share/fonts`**。flatpak 的 fontconfig 配置里有 `<dir>/app/share/fonts</dir>`，
    所以字体自动被收录，不需要改任何 `fc-*` 配置就能显示中文。
 2. **文件名用 `NotoSansCJK-Regular.ttc`**。这不是随便起的：上游 `plat_font_path` 找的就是这个名字
-   （虽然游戏侧因为路径不同仍然打不开，见 FAQ）。
+   （但路径不同，所以还要靠下节的 shim）。
 3. **压缩体积**。上游 `00_NotoSansCJK.ttc.zip` 里的 `NotoSansCJK.ttc` 有 45 个字面、112 MB。
    `trim-noto-cjk-ttc.py` 只留 5 个 Regular（JP/KR/SC/TC/HK）——它们共享同一张 CFF 字形表，
    按语言只差 `cmap` 指向哪个变体字，合计 **18 MB**。脚本只用 stdlib（SDK 的 python3 不保证有 fontTools），
@@ -319,18 +377,57 @@ Tcl/Tk 数据目录没设对、`libXft.so.2` 在沙箱里找不到、以及 sysr
    DejaVu 缺字时会落到集合里第一个 `lang=zh-cn` 匹配 —— 实测是 **Noto Sans CJK JP**，
    汉字能显示但字形是日文的（直/骨/次 等与简体不同）。`60-totk-cjk.conf` 用
    `alias binding="same"` + `prefer` 把 `DejaVu Sans` / `DejaVu Sans Mono` / `sans-serif` / `monospace`
-   的**回退列表首位**改成 `Noto Sans CJK SC`。拉丁字母仍用 DejaVu（布局的度量是按它算的），
-   只有缺字时才走 SC，所以「中文里的英文」「英文句子里的汉字」都正确。
+   的**回退列表首位**改成 `Noto Sans CJK SC`。
 5. **规则怎么生效**。放在 `/app/share/fontconfig/conf.avail/`，由包装脚本写一份只含 include 链的
    临时主配置（仍然 include runtime 的 `/etc/fonts/fonts.conf`，因此原字体目录与 `50-flatpak.conf`
    全部保留），再通过 `FONTCONFIG_FILE` 指过去。没有直接把 `FONTCONFIG_PATH` 指到 `/app` 下，
    那样会把 runtime 的配置整个丢掉。
 
-CI 里有一条 **`Verify CJK glyphs reach the Tk window`**：在 Xvfb 下用 release 自带的 Tk 实际量
-`设置检查电脑和游戏文件更新安装语言`，任何汉字 `measure() <= 0`（Xft 找不到字形，也就是用户看到的问号）
-就让构建失败；断言 `fc-match "DejaVu Sans:charset=00008bbe"` 落到 `Noto Sans CJK SC`；
-并确认包装脚本写出的主配置不会把汉字弄丢。只断言「字体文件存在」是不够的——装错目录时 fontconfig
-根本不收录，那种回归只有真的问 Tk 才能发现。
+> 注意：装了宿主字体（例如 NixOS 把 `/run/current-system/sw/share/X11/fonts` 挂进 `/run/host/fonts`，
+> 里面有 `NotoSansCJK-VF.otf.ttc`）的机器上，汉字本来就能显示，只是会落到宿主那个可变字体的
+> 日文字形；而在这个环境里 `60-totk-cjk.conf` 的 `prefer` 只会把回退目标从 JP 换成 SC，
+> **不会把宿主字体排除**。真正影响可读性的是下面那个写死的路径问题。
+
+#### 二、游戏内设置菜单（Dear ImGui）—— 真正的根因所在
+
+游戏自身的菜单（`runtime/ui/`，Dear ImGui）硬编码了字体位置，这是**真正导致用户看到问号**的那一条：
+
+```c
+// runtime/platform/linux.c:1254
+static const char *files[] = {
+    "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",  /* 及另外四个发行版路径 */
+};
+```
+
+`plat_file_exists()` 用 `stat()` 判断，`plat_file_read()` 用 `open()` 读。两者在沙箱里全部落空
+（`/usr` 是 runtime 的；本包在 `/app`；宿主在 `/run/host`），于是 `menu.cpp` 的 `fonts_up()` 里
+`merged` 为 0，日志里是 `menu: font atlas at 43.3 px, language names from 0 of 4 system fonts`，
+界面上每个汉字一个 `?`，而英文（roboto）正常。
+
+不改上游二进制，改用 `totk-cjk-path.c`：一个几十行的 `LD_PRELOAD` shim，拦截
+`stat`/`stat64`/`__xstat`/`__xstat64`/`open`/`open64`/`fopen`，**只**在那五个字符串上
+逐字对得上时重定向到本包的字体，其余路径原样透传（所以游戏数据、日志、shader 缓存、mods 不受任何影响）。
+由 `totk-play` 注入；用包内自带 clang + `--sysroot` 在构建期编译，最终用户什么都不用装。
+
+### 为什么 CI 不能用 `fc-list` / `measure()` 判定这个问题
+
+这是上一版修复漏掉的**方法论错误**，值得写下来：
+
+| 断言方式 | 看起来合理 | 为什么不可靠 |
+|---|---|---|
+| 「字体文件在 `/app/share/fonts` 里」 | 是 | 跟游戏一点关系都没有：游戏不读这个目录 |
+| `fc-list :charset=8bbe` 能查到 | 是 | 同样只证 fontconfig 能看见，游戏不经过 fontconfig |
+| `fc-match "DejaVu Sans:charset=8bbe"` 返回 SC | 是 | 同上；且用户机器上有 105 条宿主 CJK 字体时它照样通过 |
+| `font.measure('设置') > 0` | 是 | **缺字时 Xft 照样返回回退字形的推进宽度**，实测完全没 CJK 字体时也不为 0 |
+| 看 `--selftest` 退出码为 0 | 是 | 安装器的 selftest 和游戏菜单毫无关系 |
+
+唯一可信的判据是**把上游那两个函数逐字复刻出来，直接问它能不能拿到字体**。CI 里就是这么做的
+（`Verify the in-game menu can reach a CJK font`）：先用 `plat_file_exists` + `plat_file_read` 的
+复刻程序确认**不带 shim 时必须得到 `merged=0`**（否则说明这个测试根本没在测真东西），
+再确认**带 shim 时必须得到 `merged=4`**。另外单独验一条：`/app/share/totk-recomp/installer/gui.py`、
+`/app/bin/totk-play` 等真实文件以及 `.bak` 相似路径、不存在路径，都不能被 shim 改写 —— 那是它唯一的风险点。
+
+（`Verify CJK glyphs reach the Tk window` 那条仍然保留，但它验的是**安装器窗口**，不要拿它当游戏菜单的保证。）
 
 ## 为什么这样做（可行性依据）
 封装前对 AppImage 0.3.13 做了实际拆包分析：
@@ -350,7 +447,7 @@ CI 里有一条 **`Verify CJK glyphs reach the Tk window`**：在 Xvfb 下用 re
 | 游戏文件是否内含 | 否 | 只有工具链、脚本与着色器列表 |
 | 网络需求 | 仅 Windows 的 `--dlss`（下载 `nvngx_dlss.dll`） | Linux 构建路径全程离线；`--share=network` 仍开着，便于将来上游加检查更新 |
 | 体积 | AppImage 230 MB，解包约 830 MB（`llvm/` 545 MB、`python/` 187 MB、`runtime/` 72 MB） | 全部是编译必需，不能裁 |
-| CJK 字体 | runtime 与沙箱都不带；沙箱里 `/usr/share/fonts` 只读且不含宿主字体 | 必须自带一份字体到 `/app/share/fonts`，否则 Tk 界面的中文全是问号（见「中文显示的实现」） |
+| CJK 字体 | runtime 与沙箱都不自带；`/usr/share/fonts` 只读。宿主字体在 `/run/host/fonts`（部分发行版会挂进来，但游戏不用它） | 必须自带一份到 `/app/share/fonts`：安装器窗口靠 fontconfig 收录它，游戏菜单靠 `totk-cjk-path.c` 重定向到它（见「中文显示的实现」） |
 
 ### 为什么构建期要预编译 installer/ 的字节码
 
@@ -371,7 +468,8 @@ CI 里有一条断言：`installer/**/*.pyc` 必须存在，且 selftest 输出�
 ```
 io.github.jcleng.TotKRecomp.yaml          # Flatpak 清单（核心）
 totk-recomp-wrapper                       # 安装器启动包装（环境兜底 + 固定 Tcl/Tk 路径 + fontconfig）
-totk-play                                 # 游戏启动脚本（沙箱内运行，TOTK_GAME_DIR 指定位置）
+totk-play                                 # 游戏启动脚本（沙箱内运行，TOTK_GAME_DIR 指定位置，注入 CJK 路径 shim）
+totk-cjk-path.c                           # LD_PRELOAD shim：把游戏菜单那五个写死的字体路径重定向到本包字体
 totk-extract-fonts                        # 提取中文/韩文字体的入口（用 release 自带的 Python）
 trim-noto-cjk-ttc.py                      # 把上游 112 MB 的 TTC 裁到 5 个 Regular 字体（18 MB）
 60-totk-cjk.conf                          # fontconfig 规则：DejaVu 缺字时优先简体字形

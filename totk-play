@@ -39,6 +39,28 @@ fi
 LD_LIBRARY_PATH="${GAME}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 export LD_LIBRARY_PATH
 
+# ---- 游戏内菜单的中文（ImGui 的设置界面）----
+# 菜单是 Dear ImGui：先装一份拉丁小字（roboto），再把每个语言名的 CJK 字形从**系统字体**合并进来
+# （runtime/ui/menu.cpp 的 fonts_up）。字体路径由 runtime/platform/linux.c:1254 的 plat_font_path()
+# 决定，那里是五个写死的绝对路径：
+#   /usr/share/fonts/{noto-cjk,opentype/noto,google-noto-cjk,noto,truetype/noto}/NotoSansCJK-Regular.ttc
+# 没有任何环境变量或配置可以改。Flatpak 沙箱里 /usr 是 runtime 自己的（不含 CJK 字体），
+# 本包的字体在 /app/share/fonts，宿主字体在 /run/host/fonts —— 五个路径全部落空，
+# 于是 plat_font_path() 返回 0、字体不合并、只装了拉丁字形的图集把每个汉字画成 '?'
+#（英文正常，所以症状是「菜单英文 + 中文问号」）。
+#
+# 用一个 LD_PRELOAD 的小 shim 把**这五个字符串**重定向到本包的字体：只匹配这五条，
+# 其它任何路径（游戏数据、日志、shader 缓存、mods）原样透传。源码见 totk-cjk-path.c。
+CJK_SHIM=/app/lib/totk-cjk-path.so
+CJK_FONT=/app/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc
+if [ -r "${CJK_SHIM}" ] && [ -r "${CJK_FONT}" ]; then
+    LD_PRELOAD="${CJK_SHIM}${LD_PRELOAD:+:${LD_PRELOAD}}"
+    export LD_PRELOAD
+else
+    # 不致命：游戏照常能跑，只是菜单里的中文会退回问号。
+    echo "totk-play: 缺 CJK 字体或路径 shim（${CJK_FONT} / ${CJK_SHIM}），游戏菜单里的中文会显示为问号" >&2
+fi
+
 # The runtime is C.UTF-8 only; the game decodes its own UTF-8 text, and TOTK_LANG picks the
 # game language. Leave both alone unless the caller set them.
 : "${LANG:=C.UTF-8}"
