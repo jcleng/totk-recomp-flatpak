@@ -60,9 +60,15 @@
   </content_rating>
 
   <releases>
-    <release version="0.3.13" date="2026-11-09">
+    <release version="0.4.0" date="2026-11-11">
       <description>
-        <p>Packages the upstream TotK Recomp 0.3.13 Linux setup AppImage release.</p>
+        <p>Packages the upstream TotK Recomp 0.4.0 Linux setup AppImage release.</p>
+        <p>Upstream 0.4.0 brings a large memory and performance release: about 1.4 GB less memory
+        over a long session, a short out-of-memory spell no longer ends the game, compressed
+        textures by default on integrated graphics, climbing above 60 fps, dynamic resolution as a
+        setting, and the GPU command recorder enabled for AMD. The bundled setup also gains the
+        fix that lets the Linux installer start when Python packages are installed in the user's
+        own folder.</p>
       </description>
     </release>
   </releases>

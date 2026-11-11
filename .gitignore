@@ -16,3 +16,8 @@ totk-cjk-path.so
 # Python 缓存（本地跑 trim-noto-cjk-ttc.py 时产生）
 __pycache__/
 *.pyc
+
+# 本地构建目录（宿主机 / CI 之外手动 flatpak-builder 时的产物与日志）
+build/
+# 本地构建用清单（把 remote source 换成 path: 的临时副本，不进仓库）
+io.github.jcleng.TotKRecomp.localbuild.yaml

@@ -5,7 +5,7 @@
 **构建方式**：直接解包上游官方 Linux AppImage Release 并重新打包为 Flatpak，**不做源码编译**，因此构建快、产物与上游完全一致。
 
 - 上游源码：https://github.com/valentderah/totk-pc-recomp
-- 上游制品：`TotK-Setup-x86_64-0.3.13-linux.AppImage`
+- 上游制品：`TotK-Setup-x86_64-0.4.0-linux.AppImage`
 
 ---
 
@@ -20,7 +20,7 @@
 | 上游产物 | 直接可运行的 `savagewind` | `totk-setup` 安装器 |
 | 首次启动 | 选目录 → 编译（约 6 分钟） | 选 dump 与安装目录 → 翻译 + 编译 + 着色器准备（约 20-40 分钟） |
 | 游戏产物 | `/app/bin/savagewind` | 你选的安装目录里的 `totk`（在沙箱外） |
-| AppImage 体积 | 86 MB | 230 MB（解包约 830 MB，其中 LLVM 545 MB、Python 187 MB） |
+| AppImage 体积 | 86 MB | 230 MB（解包约 825 MB，其中 LLVM 545 MB、Python 187 MB） |
 
 ---
 
@@ -280,22 +280,27 @@ flatpak run --command=totk-extract-fonts io.github.jcleng.TotKRecomp \
 | 项目 | 值 |
 |---|---|
 | 应用 ID | `io.github.jcleng.TotKRecomp` |
-| 上游版本 | TotK Recomp **0.3.13** (`0.3.13+ae30a61`) |
+| 上游版本 | TotK Recomp **0.4.0** (`0.4.0+7a37fc3`) |
 | 运行时 | `org.freedesktop.Platform` 25.08 |
-| 构建来源 | 上游官方 `TotK-Setup-x86_64-0.3.13-linux.AppImage` |
-| AppImage SHA256 | `b0c992f1e879401c119c796badc43687c3a5ac804d0d8c17f37fb16925f0e3ad` |
+| 构建来源 | 上游官方 `TotK-Setup-x86_64-0.4.0-linux.AppImage` |
+| AppImage SHA256 | `0f33142d95bc616ae8fde89aa25e7b1d5d0bbc0006723b32b1da7a373020161c` |
 
-升级上游版本需要修改三处：
+升级上游版本需要修改四处：
 1. `io.github.jcleng.TotKRecomp.yaml` 里 `sources[].url` 的版本号和 `sha256`
 2. `.github/workflows/build.yml` 里的 `TOTK_VERSION`
 3. `io.github.jcleng.TotKRecomp.metainfo.xml` 里的 `<release>`
+4. 本文件的「版本对应」表与 `release.txt` 的说明表
 
 上游每个 release 资产的 `digest` 字段就是 sha256，可直接取用：
 
 ```bash
-gh release view v0.3.13 -R valentderah/totk-pc-recomp --json assets \
+gh release view v0.4.0 -R valentderah/totk-pc-recomp --json assets \
   -q '.assets[] | select(.name|test("linux.AppImage")) | "\(.name)  \(.digest)"'
 ```
+
+升级上游版本时还要留意 AppImage 内部的 `AppRun`：我们的 `totk-recomp-wrapper` 复制了它的环境变量
+（`PYTHONDONTWRITEBYTECODE`、`TCL_LIBRARY`/`TK_LIBRARY`、以及 0.4.0 新增的 `PYTHONNOUSERSITE`）。
+每次升级都比对一遍 `unsquashfs` 出来的 `AppRun`，不要漏掉新增项。
 
 ## 构建流程说明
 
@@ -430,7 +435,7 @@ static const char *files[] = {
 （`Verify CJK glyphs reach the Tk window` 那条仍然保留，但它验的是**安装器窗口**，不要拿它当游戏菜单的保证。）
 
 ## 为什么这样做（可行性依据）
-封装前对 AppImage 0.3.13 做了实际拆包分析：
+封装前对 AppImage（0.3.13 初次封装，0.4.0 复核）做了实际拆包分析：
 
 | 检查项 | 结果 | 影响 |
 |---|---|---|
@@ -446,7 +451,7 @@ static const char *files[] = {
 | 配置路径 | 遵循 `XDG_STATE_HOME`（`$XDG_STATE_HOME/totk-recomp/setup.json`） | Flatpak 自动沙箱化到 `~/.var/app/` |
 | 游戏文件是否内含 | 否 | 只有工具链、脚本与着色器列表 |
 | 网络需求 | 仅 Windows 的 `--dlss`（下载 `nvngx_dlss.dll`） | Linux 构建路径全程离线；`--share=network` 仍开着，便于将来上游加检查更新 |
-| 体积 | AppImage 230 MB，解包约 830 MB（`llvm/` 545 MB、`python/` 187 MB、`runtime/` 72 MB） | 全部是编译必需，不能裁 |
+| 体积 | AppImage 230 MB，解包约 825 MB（`llvm/` 545 MB、`python/` 187 MB、`runtime/` 72 MB） | 全部是编译必需，不能裁 |
 | CJK 字体 | runtime 与沙箱都不自带；`/usr/share/fonts` 只读。宿主字体在 `/run/host/fonts`（部分发行版会挂进来，但游戏不用它） | 必须自带一份到 `/app/share/fonts`：安装器窗口靠 fontconfig 收录它，游戏菜单靠 `totk-cjk-path.c` 重定向到它（见「中文显示的实现」） |
 
 ### 为什么构建期要预编译 installer/ 的字节码

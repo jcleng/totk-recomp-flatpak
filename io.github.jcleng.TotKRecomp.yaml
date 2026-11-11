@@ -275,8 +275,8 @@ modules:
 
     sources:
       - type: file
-        url: https://github.com/valentderah/totk-pc-recomp/releases/download/v0.3.13/TotK-Setup-x86_64-0.3.13-linux.AppImage
-        sha256: b0c992f1e879401c119c796badc43687c3a5ac804d0d8c17f37fb16925f0e3ad
+        url: https://github.com/valentderah/totk-pc-recomp/releases/download/v0.4.0/TotK-Setup-x86_64-0.4.0-linux.AppImage
+        sha256: 0f33142d95bc616ae8fde89aa25e7b1d5d0bbc0006723b32b1da7a373020161c
         dest-filename: TotK-Setup.appimage
       - type: file
         path: icons/io.github.jcleng.TotKRecomp.png

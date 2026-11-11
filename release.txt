@@ -19,6 +19,26 @@ flatpak run io.github.jcleng.TotKRecomp
 编译完成后得到的是普通可执行文件 `totk`。**用本包提供的游戏入口在沙箱内启动它**：先设置一次游戏目录，
 之后从应用菜单点 **TotK** 即可。
 
+### 本版：上游 0.4.0
+
+本次更新把上游从 0.3.13 升到 **0.4.0**，是上游改动最大的一次（内存/性能为主）。要点：
+
+- **长时间游玩省约 1.4 GB 内存**：Hyrule Field 十分钟实测，显存 4.8→3.4 GB。
+- **短暂的内存不足不再直接崩溃**：会先释放可让出的内存并重试最多 30 秒，而不是报致命错误退出。
+- **核显默认使用压缩纹理**（Switch 纹理转 BC3）：AMD APU / Intel 核显约省 900 MB、约 +20% FPS。
+- **掌机模式按你设的分辨率渲染**：以前 1280x720 输出却渲染 1920x1080 场景，神殿入口等重场景可能崩。
+- **60 fps 以上爬墙正常**（不再变慢、不会爬不到梯子顶/台阶边）。
+- **动态分辨率成为可关的设置**（Graphics 里），关掉即可保持你的渲染缩放。
+- **AMD 显卡也启用 GPU 命令录制线程**。若出现开机黑屏或 `VK_ERROR_DEVICE_LOST`，
+  在 `totk.ini` 的 `[performance]` 下加 `vk_recorder = 0`。
+- **安装器修复（#985）**：用户自己 `pip` 装过包时 Linux AppImage 起不来。本 Flatpak 的包装脚本
+  同步了上游 `AppRun` 新增的 `PYTHONNOUSERSITE=1`，效果一致。
+
+已知问题（上游说明）：笔记本在 0.4.0 会主动请求独显，若之前选过 GPU，`totk.ini` 里的 `gpu_index`
+可能指向了核显 —— 删掉该行或把 GPU 设回 Auto 后重跑安装器。1.2.1 + DLSS 有画面放大到左上角的 bug，先关 DLSS。
+
+上游原话：在已有安装目录上重跑新安装器即可，会保留游戏文件、存档与 `totk.ini`，重新生成 `totk` 与着色器。
+
 ```bash
 # 指向含有 totk 的目录（不是父目录）
 flatpak override --user --env=TOTK_GAME_DIR=/path/to/game io.github.jcleng.TotKRecomp
@@ -63,9 +83,9 @@ Vulkan 1.3 显卡驱动、16 GB 内存、约 40 GB 空闲磁盘。
 | 项 | 值 |
 |---|---|
 | 应用 ID | `io.github.jcleng.TotKRecomp` |
-| 上游版本 | TotK Recomp **0.3.13** |
+| 上游版本 | TotK Recomp **0.4.0** (`0.4.0+7a37fc3`) |
 | 运行时 | org.freedesktop.Platform 25.08 |
-| 构建来源 | 上游官方 `TotK-Setup-x86_64-0.3.13-linux.AppImage` |
+| 构建来源 | 上游官方 `TotK-Setup-x86_64-0.4.0-linux.AppImage` |
 
 ## 沙箱内的路径
 

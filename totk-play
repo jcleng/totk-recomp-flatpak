@@ -6,7 +6,7 @@
 # plain host binary that a NixOS or similar host cannot start directly, so wrapping it in
 # the sandbox is a way to give it a glibc it can run on.
 #
-# Two things matter here, both verified against the 0.3.13 release:
+# Two things matter here, both verified against the 0.4.0 release:
 #
 #  1. The game's folder must come FIRST in LD_LIBRARY_PATH. The game links `libSDL3.so.0`
 #     with RUNPATH $ORIGIN, but LD_LIBRARY_PATH beats RUNPATH, and the runtime ships a much

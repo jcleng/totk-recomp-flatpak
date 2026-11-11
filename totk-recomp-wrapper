@@ -16,6 +16,12 @@ APP_LIB=/app/lib
 # __pycache__，而 /app 在沙箱里是只读的。上游的 AppRun 也是这么做的（PYTHONDONTWRITEBYTECODE=1）。
 export PYTHONDONTWRITEBYTECODE=1
 
+# 上游 AppRun 从 0.4.0 起（对应 release note 的 #985 "Linux AppImage: the installer starts"）还设了这一条：
+# 忽略 ~/.local/lib/pythonX.Y/site-packages，否则用户自己 pip 装过的包（例如 PyPI 上的 `installer`）
+# 会遮蔽 release 自带的 installer 包，窗口一起就报错。沙箱里 HOME 指向用户的真实家目录，
+# 所以这里同样受益，必须与上游保持一致。
+export PYTHONNOUSERSITE=1
+
 # 上游 installer/recent.py 的模块 docstring 里写了一个反斜杠路径（%LOCALAPPDATA%\TotK Recomp\setup.json），
 # 在非 raw 字符串里就是无效转义，Python 3.12+ 会在**编译该模块时**报 SyntaxWarning。
 # 注意：这种编译期警告发生在 warnings 过滤器生效之前，PYTHONWARNINGS 在全新安装（没有 .pyc）时压不住，
