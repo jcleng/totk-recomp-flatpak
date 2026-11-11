@@ -373,8 +373,8 @@ jobs:
             cat > mimic.c <<"CEOF"
           /* The two upstream functions that decide the menu font, copied verbatim from
              runtime/platform/linux.c (plat_file_exists + plat_file_read) and the loop of
-             menu.cpp fonts_up(). Kept in sync by hand; the point is to ask the game'
-             own question, not to test the shim in isolation. */
+             menu.cpp fonts_up(). Kept in sync by hand; the point is to ask the same
+             question the game itself asks, not to test the shim in isolation. */
           #include <stdio.h>
           #include <string.h>
           #include <sys/stat.h>
