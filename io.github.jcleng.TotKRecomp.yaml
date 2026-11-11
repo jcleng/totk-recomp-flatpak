@@ -52,6 +52,97 @@ modules:
         url: https://github.com/plougher/squashfs-tools/archive/refs/tags/4.6.1.tar.gz
         sha256: 9c4974e07c61547dae14af4ed1f358b7d04618ae194e54d6be72ee126f0d2f53
 
+  # ---- 中文字体 ----------------
+  # 设置界面中文显示成问号，根因是界面（Tk 9）走 Xft/fontconfig，而沙箱里没有任何 CJK 字体。
+  #
+  # 上游 installer/gui.py 在非 Windows 上把字体写死成 `DejaVu Sans`（日志框是 `DejaVu Sans Mono`），
+  # 那是照着 Steam Runtime 写的，而 DejaVu 一个汉字都没有：中文只能靠 fontconfig 的兜底链，
+  # 兜底链在没有任何 CJK 字体时就会拿一个画不出汉字的字体顶替，结果全是问号。
+  #
+  # 同一个字体还决定游戏内菜单：runtime/platform/linux.c 的 plat_font_path 按固定路径找
+  # `/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc`（供 ja/ko/zh-Hans/zh-Hant 的菜单文本）。
+  # Flatpak 里 /usr/share/fonts 既只读也不含宿主字体，所以那个路径永远打不开。
+  #
+  # 于是把同一份字体装到 /app/share/fonts（被 fontconfig 收录，50-flatpak.conf 的 <dir>/app/share/fonts），
+  # 并保持文件名为 NotoSansCJK-Regular.ttc，让两个消费方都能命中：
+  #   * Tk/Xft 通过 fontconfig 找到它；
+  #   * 游戏按文件名在固定路径里找 -- 与 savagewind 不同的是这里不能改二进制，
+  #     所以另在 /app/share/fonts/noto-cjk 下留好名字，再在包装脚本里把上游的绝对路径导过去
+  #     （见 totk-recomp-wrapper 开头的说明与 README）。
+  - name: noto-cjk-font
+    buildsystem: simple
+    build-commands:
+      # 上游 00_NotoSansCJK.ttc.zip 里的 NotoSansCJK.ttc 有 45 个字面（5 语言 x 7 字重 + 等宽），112 MB。
+      # 这里只留 5 个 Regular（JP/KR/SC/TC/HK，共 18 MB）：同一套字形，按语言只差 cmap 指向哪个变体字，
+      # 足够覆盖简繁中文、日文、韩文。粗体不保留，Tk 找不到粗体时会自己合成（见 trim 脚本注释）。
+      # 脚本只用 stdlib（SDK 的 python3 不保证有 fontTools），见 trim-noto-cjk-ttc.py 的说明。
+      - python3 trim-noto-cjk-ttc.py NotoSansCJK.ttc NotoSansCJK-Regular.ttc
+      - install -Dm644 NotoSansCJK-Regular.ttc
+          ${FLATPAK_DEST}/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc
+      - install -Dm644 LICENSE ${FLATPAK_DEST}/share/licenses/noto-cjk/LICENSE
+      # 让 fontconfig 在 DejaVu Sans / sans-serif 缺字时优先回退到简体字形（而不是按 locale 落到日文）。
+      - install -Dm644 60-totk-cjk.conf
+          ${FLATPAK_DEST}/share/fontconfig/conf.avail/60-totk-cjk.conf
+      # 为何放在 conf.avail 而不是 conf.d：
+      #   * /app/share/fontconfig/conf.avail 是 Flatpak 约定的“可被 include 的目录”，不会自动生效；
+      #   * 真正生效靠包装脚本导出的 FONTCONFIG_FILE（见 totk-recomp-wrapper），它把这份配置
+      #     include 进 runtime 原有的 /etc/fonts/fonts.conf 后面，既保留原字体目录，又如上偏好。
+      # 这样不怕 runtime 的 conf.d 结构与版本差异。
+      # 自检：重新解析写出的集合，确认 5 个字面都在、sfnt 头正确，且每个字面都能映射到
+      # 简繁中日韩的代表字（trim 脚本已经查过一遍，这里对**安装后**的文件再查一次，
+      # 防的是 install 那一步装错文件）。字体写坏时在构建日志里报，而不是让用户看到一屏问号。
+      - |
+        set -eu
+        python3 - "${FLATPAK_DEST}/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc" <<'PY'
+        import struct, sys
+        p = sys.argv[1]
+        d = open(p, 'rb').read()
+        assert d[:4] == b'ttcf', f'not a collection: {d[:4]!r}'
+        n = struct.unpack_from('>I', d, 8)[0]
+        assert n == 5, f'expected 5 faces, got {n}'
+        want = {ord(c) for c in '设置設定日本語한국어'}
+        for off in struct.unpack_from('>5I', d, 12):
+            assert d[off:off + 4] in (b'OTTO', b'\x00\x01\x00\x00'), f'bad sfnt at {off}'
+            ntables = struct.unpack_from('>H', d, off + 4)[0]
+            cmap = None
+            for i in range(ntables):
+                rec = off + 12 + 16 * i
+                if d[rec:rec + 4] == b'cmap':
+                    cmap = struct.unpack_from('>I', d, rec + 8)[0]
+                    break
+            assert cmap is not None, f'face at {off}: no cmap'
+            nsub = struct.unpack_from('>H', d, cmap + 2)[0]
+            covered = set()
+            for i in range(nsub):
+                sub = cmap + struct.unpack_from('>I', d, cmap + 4 + 8 * i + 4)[0]
+                if struct.unpack_from('>H', d, sub)[0] != 12:
+                    continue
+                for g in range(struct.unpack_from('>I', d, sub + 12)[0]):
+                    r = sub + 16 + 12 * g
+                    start, end = struct.unpack_from('>II', d, r)
+                    covered.update(range(start, min(end, 0x10FFFF) + 1))
+            absent = want - covered
+            assert not absent, f'face at {off}: no glyph for {sorted(map(hex, absent))}'
+        print(f'{p}: {n} faces, sfnt headers and CJK cmaps ok, {len(d)} bytes')
+        PY
+    sources:
+      - type: archive
+        url: https://github.com/notofonts/noto-cjk/releases/download/Sans2.004/00_NotoSansCJK.ttc.zip
+        sha256: a56077736038875f3a5b1e6715b2713a2bd049cc0bf0dfdf645927b070d38bfc
+        dest-filename: NotoSansCJK.zip
+      - type: file
+        path: trim-noto-cjk-ttc.py
+      - type: file
+        path: 60-totk-cjk.conf
+    post-install:
+      # 构建期的 fc-cache 没有意义（最终用户第一次运行时 fontconfig 会自己建缓存），
+      # 这里只确保字体与规则真的在包里，不依赖后续模块。
+      - |
+        set -eu
+        test -s ${FLATPAK_DEST}/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc
+        test -s ${FLATPAK_DEST}/share/fontconfig/conf.avail/60-totk-cjk.conf
+        echo "noto-cjk-font: $(du -h ${FLATPAK_DEST}/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc | cut -f1)"
+
   - name: totk-recomp
     buildsystem: simple
     build-commands:

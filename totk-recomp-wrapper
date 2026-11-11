@@ -27,6 +27,52 @@ export PYTHONWARNINGS="ignore:invalid escape sequence"
 export TCL_LIBRARY="${ROOT}/python/lib/tcl9.0"
 export TK_LIBRARY="${ROOT}/python/lib/tk9.0"
 
+# ---- CJK 字体 ----------------
+# 设置界面（Tk 9）在 Linux 上走 Xft/fontconfig，而 installer/gui.py 把字体写死成 `DejaVu Sans`
+# （日志框 `DejaVu Sans Mono`）—— DejaVu 没有任何汉字，所以中文全靠 fontconfig 的兜底链。
+# 沙箱里原本没有任何 CJK 字体，兜底链只能拿一个画不出汉字的字体顶替，于是界面中文全是问号。
+#
+# 字体由清单里的 noto-cjk-font 模块装到 /app/share/fonts（会被 fontconfig 收录），
+# 下面只做一件事：让 60-totk-cjk.conf 生效，使 DejaVu 缺字时回退到 `Noto Sans CJK SC`，
+# 而不是按 locale 落到日文字形（C.UTF-8 下没有语言偏好，fontconfig 默认选第一个 lang=zh-cn，即 JP）。
+#
+# 做法：写一份只含 include 链的临时主配置，仍然 include runtime 原来的 /etc/fonts/fonts.conf，
+# 因此字体目录列表与 50-flatpak.conf（<dir>/app/share/fonts</dir>）全部保留，只是在后面追加我们的偏好。
+# 不直接把 FONTCONFIG_PATH 指向 /app 下的目录：那会把 runtime 的配置整体丢掉。
+CJK_FONT=/app/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc
+CJK_CONF=/app/share/fontconfig/conf.avail/60-totk-cjk.conf
+if [ -r "${CJK_FONT}" ]; then
+    # runtime 的主配置位置：发行版习惯放 /etc/fonts/fonts.conf，有些镜像只有 /usr/share/fontconfig。
+    # 两者都不存在时不要覆盖 FONTCONFIG_FILE —— 交给 fontconfig 自己的默认值，至少不把字体目录弄丢。
+    SYS_FC=
+    for c in /etc/fonts/fonts.conf /usr/share/fontconfig/fonts.conf; do
+        if [ -r "$c" ]; then SYS_FC="$c"; break; fi
+    done
+    FC_CONF=
+    if [ -n "${SYS_FC}" ]; then
+        FC_CONF="${TMPDIR:-/tmp}/totk-fontconfig.conf"
+        # 每次启动重写，避免与旧版包或不同 runtime 的配置混淆
+        {
+            printf '%s\n' \
+                '<?xml version="1.0"?>' \
+                '<!DOCTYPE fontconfig SYSTEM "fonts.dtd">' \
+                '<fontconfig>' \
+                "  <include ignore_missing=\"yes\">${SYS_FC}</include>" \
+                "  <include ignore_missing=\"yes\">${CJK_CONF}</include>" \
+                '</fontconfig>'
+        } > "${FC_CONF}" 2>/dev/null || FC_CONF=
+    fi
+    if [ -n "${FC_CONF}" ] && [ -r "${FC_CONF}" ]; then
+        export FONTCONFIG_FILE="${FC_CONF}"
+    else
+        # 写不进临时目录也不致命：字体仍在 /app/share/fonts 下，fontconfig 依旧能收录（中文可显示），
+        # 只是缺字时可能优先日文字形。
+        echo "totk-recomp-wrapper: 无法写入 fontconfig 主配置，界面中文将使用默认回退字形" >&2
+    fi
+else
+    echo "totk-recomp-wrapper: 缺 CJK 字体 ${CJK_FONT}，界面中文会显示为问号" >&2
+fi
+
 # ---- 显示 ----
 # 安装器窗口是 Tk 9，它**没有 Wayland 后端**（libtcl9tk9.0.so 里搜不到任何 "wayland" 符号），
 # 只能走 X11。在 Wayland 桌面上这意味着必须通过 XWayland，否则 tk.Tk() 会直接抛：

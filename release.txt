@@ -29,7 +29,14 @@ flatpak run --command=totk-play io.github.jcleng.TotKRecomp
 
 ### 中文/韩文界面字体
 
-中文/韩文/繁体界面文字需要 Switch 固件里的系统字体（BFTTF）。已编译完的话不用重装，
+**安装器界面（设置窗口）的中文：本包已内置字体，无需任何操作。**
+
+以前设置界面的中文全是问号：上游安装器用的是 Tk 9，`installer/gui.py` 在 Linux 上把字体写死成
+`DejaVu Sans`，而 DejaVu 没有任何汉字，沙箱里又没有 CJK 字体可以让 fontconfig 回退，
+于是所有汉字都画成了问号。本版本把 Noto Sans CJK 装进 `/app/share/fonts`（fontconfig 会收录），
+并附一份规则让缺字时优先回退到简体字形（而不是日文字形），中文界面从此直接可用。
+
+**游戏内文本（简体/繁体中文、韩文）** 仍需 Switch 固件里的系统字体（BFTTF）。已编译完的话不用重装，
 直接提取到游戏目录的 `shared-fonts/`（目录必须尚不存在）：
 
 ```bash

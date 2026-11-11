@@ -10,6 +10,8 @@ on:
     paths:
       - 'io.github.jcleng.TotKRecomp.yaml'
       - 'totk-recomp-wrapper'
+      - 'trim-noto-cjk-ttc.py'
+      - '60-totk-cjk.conf'
       - 'io.github.jcleng.TotKRecomp.desktop'
       - 'io.github.jcleng.TotKRecomp.metainfo.xml'
       - 'icons/**'
@@ -225,6 +227,113 @@ jobs:
             exit 1
           fi
 
+      # 中文界面的字形覆盖：这就是「设置界面中文显示问号」那个 bug 的回归测试。
+      #
+      # 根因（对照上游源码核实）：installer/gui.py 在非 Windows 上把界面字体写死成 `DejaVu Sans`
+      # （日志框 `DejaVu Sans Mono`），Tk 9 在 Linux 上走 Xft/fontconfig 渲染。DejaVu 不含任何汉字，
+      # 汉字只能来自 fontconfig 的兜底链；而 Flatpak 沙箱里原本没有任何 CJK 字体，
+      # 兜底链拿不出字形，于是界面上所有中文都画成了问号/豆腐块。
+      #
+      # 注意两个容易踩的坑，这个步骤专门绕开它们：
+      #   1. 不能用 font.measure() 判断——实测在完全没有 CJK 字体时它依然返回非 0 宽度
+      #      （Xft 给缺字返回回退字形的宽度），断不出问题。
+      #   2. 不能只看「字体文件存在」——字体装错目录时 fontconfig 根本不收录。
+      #
+      # 真正可靠的判据是 Fontconfig 的字符集查询：`fc-list :charset=<码位>` 只列出**真的能画出
+      # 这个字**的字体。实测只有 DejaVu 时它返回 0 条，装上 Noto CJK 后返回 5 条，
+      # 与 Tk 实际渲染出来的像素结果一致（无字体时每个汉字都渲染成与私用区字符 uE000 完全相同的
+      # 豆腐块）。所以这里：① 逐个码位断言有字体能画；② 断言缺字时落到简体 SC 而不是日文 JP。
+      - name: Verify CJK glyphs reach the Tk window
+        run: |
+          set -eu
+
+          echo '::group::font and fontconfig rule are installed'
+          flatpak run --command=sh "${APP_ID}" -c '
+            set -eu
+            FONT=/app/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc
+            CONF=/app/share/fontconfig/conf.avail/60-totk-cjk.conf
+            test -r "$FONT" || { echo "MISSING: $FONT"; exit 1; }
+            test -r "$CONF" || { echo "MISSING: $CONF"; exit 1; }
+            ls -l "$FONT" "$CONF"
+            # 5 个字面（JP/KR/SC/TC/HK Regular），不是被裁空的壳
+            python3 - "$FONT" <<PY
+          import struct, sys
+          d = open(sys.argv[1], "rb").read()
+          assert d[:4] == b"ttcf", d[:4]
+          n = struct.unpack_from(">I", d, 8)[0]
+          assert n == 5, f"expected 5 faces, got {n}"
+          print(f"collection of {n} faces, {len(d)} bytes")
+          PY
+          '
+          echo '::endgroup::'
+
+          echo '::group::every Chinese character of the window has a font'
+          # 取 installer/text/zh-Hans.json 的真实界面字符串，而不是随手挑几个字：
+          # 只要有一个字符没有任何字体能画，用户就在那一行看到问号。
+          flatpak run --command=sh "${APP_ID}" -c '
+            set -eu
+            python3 - <<PY
+          import json, subprocess, sys
+          cat = json.load(open("/app/share/totk-recomp/installer/text/zh-Hans.json", encoding="utf-8"))
+          chars = set()
+          for k, v in cat.items():
+              if k.startswith(("ui.", "step.", "phase.", "check.", "fonts.", "warn.")):
+                  chars.update(v)
+          # 只看 CJK 区（汉字、假名、韩文、全角标点）；拉丁字母与符号本来就由 DejaVu 覆盖。
+          chars = sorted(c for c in chars if ord(c) > 0x2E7F)
+          print(f"{len(chars)} CJK characters in the window text")
+          bad = []
+          for c in chars:
+              # fc-list :charset 只列出真的能画出该码位的字体；空输出 = 这个字会渲染成问号。
+              out = subprocess.run(["fc-list", f":charset={ord(c):08x}"], capture_output=True, text=True).stdout
+              if not out.strip():
+                  bad.append(c)
+          if bad:
+              sys.exit("no font can draw: " + repr("".join(bad)))
+          print(f"ok: all {len(chars)} CJK characters of the window have a font")
+          PY
+          '
+          echo '::endgroup::'
+
+          echo '::group::DejaVu falls back to the Simplified-Chinese face'
+          flatpak run --command=sh "${APP_ID}" -c '
+            set -eu
+            # 复刻包装脚本写出的主配置：include runtime 原配置 + 我们的 60-totk-cjk.conf
+            SYS_FC=/etc/fonts/fonts.conf
+            test -r "$SYS_FC" || SYS_FC=/usr/share/fontconfig/fonts.conf
+            test -r "$SYS_FC" || { echo "no system fontconfig in the runtime"; exit 1; }
+            FC=/tmp/fc-ci.conf
+            {
+              printf "%s\n" "<?xml version=\"1.0\"?>"
+              printf "%s\n" "<!DOCTYPE fontconfig SYSTEM \"fonts.dtd\">"
+              printf "%s\n" "<fontconfig>"
+              printf "  <include ignore_missing=\"yes\">%s</include>\n" "$SYS_FC"
+              printf "%s\n" "  <include ignore_missing=\"yes\">/app/share/fontconfig/conf.avail/60-totk-cjk.conf</include>"
+              printf "%s\n" "</fontconfig>"
+            } > "$FC"
+            # fc-match 总是返回某个字体，所以这里断言的是「具体返回哪一个」：缺汉字时必须是 SC。
+            for fam in "DejaVu Sans" "DejaVu Sans Mono"; do
+              m=$(FONTCONFIG_FILE=$FC fc-match "$fam:charset=00008bbe")
+              echo "$fam + U+8BBE -> $m"
+              case "$m" in
+                *"Noto Sans CJK SC"*) ;;
+                *) echo "ERROR: $fam does not fall back to the SC face (got: $m)"; exit 1 ;;
+              esac
+            done
+          '
+          echo '::endgroup::'
+
+          echo '::group::the wrapper enables the CJK rule'
+          flatpak run --command=sh "${APP_ID}" -c '
+            set -eu
+            # 包装脚本必须引用字体与规则文件（它们是唯一让 fontconfig 优先 SC 的地方）
+            grep -q "NotoSansCJK-Regular.ttc" /app/bin/totk-recomp-wrapper
+            grep -q "60-totk-cjk.conf" /app/bin/totk-recomp-wrapper
+            grep -q "FONTCONFIG_FILE" /app/bin/totk-recomp-wrapper
+            echo "the wrapper points fontconfig at the CJK rule"
+          '
+          echo '::endgroup::'
+
       # 上一个步骤显式设了 DISPLAY=:99，所以它永远测不到「Wayland 会话下 X11 被拿掉」这个回归。
       # 注意：不能用 --unset-env=DISPLAY 模拟——那等于「宿主根本没有 X server」，
       # 不是 Wayland 场景，而且沙箱里 /tmp/.X11-unix 是私有的，永远看不到宿主的 Xvfb。
@@ -406,7 +515,14 @@ jobs:
             echo ""
             echo "### 中文/韩文界面字体"
             echo ""
-            echo "中文/韩文/繁体界面文字需要 Switch 固件里的系统字体（BFTTF）。已编译完的话不用重装，"
+            echo "**安装器界面（设置窗口）的中文：本包已内置字体，无需任何操作。**"
+            echo ""
+            echo "以前设置界面的中文全是问号：上游安装器用的是 Tk 9，\`installer/gui.py\` 在 Linux 上把字体写死成"
+            echo "\`DejaVu Sans\`，而 DejaVu 没有任何汉字，沙箱里又没有 CJK 字体可以让 fontconfig 回退，"
+            echo "于是所有汉字都画成了问号。本版本把 Noto Sans CJK 装进 \`/app/share/fonts\`（fontconfig 会收录），"
+            echo "并附一份规则让缺字时优先回退到简体字形（而不是日文字形），中文界面从此直接可用。"
+            echo ""
+            echo "**游戏内文本（简体/繁体中文、韩文）** 仍需 Switch 固件里的系统字体（BFTTF）。已编译完的话不用重装，"
             echo "直接提取到游戏目录的 \`shared-fonts/\`（目录必须尚不存在）："
             echo ""
             echo '```bash'
