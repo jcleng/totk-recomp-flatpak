@@ -1,12 +1,25 @@
 [Desktop Entry]
+# 与主入口共用同一套界面语言（上游 installer/text/：en、ru、pt-BR、zh-Hans → ru / pt_BR / zh_CN）
 Name=TotK
+Name[ru]=TotK
+Name[pt_BR]=TotK
+Name[zh_CN]=TotK
 GenericName=The Legend of Zelda: Tears of the Kingdom
+GenericName[ru]=The Legend of Zelda: Tears of the Kingdom
+GenericName[pt_BR]=The Legend of Zelda: Tears of the Kingdom
+GenericName[zh_CN]=塞尔达传说：王国之泪
 Comment=Play the build made by TotK Recomp Setup
+Comment[ru]=Запустить сборку, созданную установщиком TotK Recomp
+Comment[pt_BR]=Jogar a compilação feita pela Instalação do TotK Recomp
+Comment[zh_CN]=运行由 TotK Recomp 安装程序编译出的游戏
 Exec=totk-play
 Icon=io.github.jcleng.TotKRecomp
 Terminal=false
 Type=Application
 Categories=Game;ActionGame;
 Keywords=zelda;tears;kingdom;totk;switch;recomp;
+Keywords[ru]=zelda;tears;kingdom;totk;switch;перекомпиляция;
+Keywords[pt_BR]=zelda;tears;kingdom;totk;switch;recompilação;
+Keywords[zh_CN]=zelda;tears;kingdom;totk;switch;塞尔达;王国之泪;重编译;
 StartupNotify=true
 StartupWMClass=totk

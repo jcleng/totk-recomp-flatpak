@@ -1,12 +1,27 @@
 [Desktop Entry]
+# 翻译跟随上游安装器界面的语言集（installer/text/ 只有 en、ru、pt-BR、zh-Hans 四份）。
+# desktop entry 规范的 locale 键是 lang_COUNTRY[.ENCODING][@MODIFIER]，没有 script 子标签，
+# 所以上游的 zh-Hans 只能映射成 zh_CN；en 用无后缀的默认文案。
 Name=TotK Recomp Setup
+Name[ru]=Установка TotK Recomp
+Name[pt_BR]=Instalação do TotK Recomp
+Name[zh_CN]=TotK Recomp 安装程序
 GenericName=The Legend of Zelda: Tears of the Kingdom (PC Recompilation)
+GenericName[ru]=The Legend of Zelda: Tears of the Kingdom (ПК-рекомпиляция)
+GenericName[pt_BR]=The Legend of Zelda: Tears of the Kingdom (recompilação para PC)
+GenericName[zh_CN]=塞尔达传说：王国之泪（PC 重编译）
 Comment=Builds Tears of the Kingdom for this PC from your own game files
+Comment[ru]=Собирает Tears of the Kingdom для этого ПК из ваших собственных файлов игры
+Comment[pt_BR]=Compila Tears of the Kingdom para este PC a partir dos seus próprios arquivos do jogo
+Comment[zh_CN]=用你自己的游戏文件为本机编译《王国之泪》
 Exec=totk-recomp-wrapper
 Icon=io.github.jcleng.TotKRecomp
 Terminal=false
 Type=Application
 Categories=Game;ActionGame;
 Keywords=zelda;tears;kingdom;totk;switch;recomp;
+Keywords[ru]=zelda;tears;kingdom;totk;switch;перекомпиляция;
+Keywords[pt_BR]=zelda;tears;kingdom;totk;switch;recompilação;
+Keywords[zh_CN]=zelda;tears;kingdom;totk;switch;塞尔达;王国之泪;重编译;
 StartupNotify=true
 StartupWMClass=Tk
